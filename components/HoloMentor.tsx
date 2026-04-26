@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useAppContext } from '../context/AppContext';
 import { parseGlossaryTerms } from '../utils/parseGlossaryTerms';
 
 const BACKEND = 'http://localhost:8000';
@@ -276,6 +277,29 @@ export const HoloMentor: React.FC<HoloMentorProps> = ({
     lastAlertedChangeRef.current = null;
   }, [symbol]);
 
+  // React to recent trades so Holo can teach the user about their trade
+  const { state: appState, dispatch: appDispatch } = useAppContext();
+  useEffect(() => {
+    const lt = appState.lastTrade;
+    if (!lt) return;
+    // Only react when the trade involves the currently-open symbol
+    if (lt.stock?.symbol !== symbol) return;
+
+    const action = lt.type === 0 ? 'bought' : 'sold';
+    const question = `I just ${action} ${lt.shares} shares of ${lt.stock.symbol} at $${lt.price.toFixed(2)}. As a beginner, explain what this trade means for my portfolio and what I should watch next.`;
+
+    // Fire a short mentor explanation specifically about the trade
+    streamIntoNewBubble(
+      `${BACKEND}/api/mentor/explain`,
+      { symbol, interval, question },
+      '🎓 Trade Review'
+    );
+
+    // Clear the flag so we don't repeat this message
+    appDispatch({ type: 'CLEAR_LAST_TRADE' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appState.lastTrade, symbol, interval]);
+
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
       if (scrollRef.current) {
@@ -539,24 +563,23 @@ export const HoloMentor: React.FC<HoloMentorProps> = ({
         className="flex items-center gap-2 px-4 py-3 flex-shrink-0 border-t"
         style={{ borderColor: '#00BFA622' }}
       >
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask Holo to teach you something…"
-          disabled={isBusy}
-          className="flex-1 bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-500 transition disabled:opacity-50"
-        />
-        <button
-          type="submit"
-          disabled={isBusy || !input.trim()}
-          className="flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center transition-opacity disabled:opacity-30"
-          style={{ background: 'linear-gradient(135deg, #00BFA6, #007a6e)' }}
-        >
-          <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.269 20.876L5.999 12zm0 0h7.5" />
-          </svg>
-        </button>
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask Holo to teach you something…"
+            disabled={isBusy}
+            className="flex-1 bg-card border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-500 transition disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={isBusy || !input.trim()}
+            className={`btn btn-primary flex-shrink-0 w-9 h-9 ${isBusy || !input.trim() ? 'opacity-60' : ''}`}
+          >
+            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.269 20.876L5.999 12zm0 0h7.5" />
+            </svg>
+          </button>
       </form>
 
       {/* Disclaimer */}

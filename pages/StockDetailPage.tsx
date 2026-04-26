@@ -260,14 +260,14 @@ const StockDetailPage: React.FC = () => {
             <button
               onClick={() => handleTrade(TradeType.BUY)}
               disabled={!canBuy || isTrading}
-              className="px-6 py-2 bg-positive text-white font-bold rounded-lg hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed min-w-[80px]"
+              className={`btn btn-primary min-w-[88px] ${isTrading ? 'opacity-60 cursor-wait' : ''}`}
             >
               {isTrading ? '…' : 'Buy'}
             </button>
             <button
               onClick={() => handleTrade(TradeType.SELL)}
               disabled={!canSell || isTrading}
-              className="px-6 py-2 bg-destructive text-white font-bold rounded-lg hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed min-w-[80px]"
+              className={`btn btn-secondary min-w-[88px] ${isTrading ? 'opacity-60 cursor-wait' : ''}`}
             >
               {isTrading ? '…' : 'Sell'}
             </button>

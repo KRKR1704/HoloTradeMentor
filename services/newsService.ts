@@ -8,10 +8,27 @@ export const getMarketNews = async (): Promise<NewsArticle[]> => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ category: 'general' }),
   });
-  if (!res.ok) throw new Error(`News fetch failed: HTTP ${res.status}`);
-  const data = await res.json();
-  // Handle error shape from backend: { error: string, articles: [] }
-  if (data && !Array.isArray(data) && data.error) throw new Error(data.error);
+
+  // Try to parse JSON body even on non-OK so backend can return fallback articles
+  let data: any = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    // ignore parse errors
+  }
+
+  if (!res.ok) {
+    // If backend provided an articles array despite non-OK, return it as a graceful fallback
+    if (data && Array.isArray(data.articles)) return data.articles as NewsArticle[];
+    throw new Error(`News fetch failed: HTTP ${res.status}`);
+  }
+
+  // Backend may respond with either an array OR an object { error, articles }
+  if (data && !Array.isArray(data) && data.error) {
+    if (Array.isArray(data.articles)) return data.articles as NewsArticle[];
+    throw new Error(data.error);
+  }
+
   return Array.isArray(data) ? data : [];
 };
 

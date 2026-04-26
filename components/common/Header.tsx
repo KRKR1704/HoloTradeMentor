@@ -17,7 +17,7 @@ const NavItem = ({ to, icon, label, isMobile = false }: { to: string; icon: Reac
              <NavLink
                 to={to}
                 className={({ isActive }) =>
-                    `${baseClasses} flex-col w-full h-16 ${isActive ? activeClass : inactiveClass}`
+                    `${baseClasses} flex-col w-full h-16 px-2 ${isActive ? activeClass : inactiveClass}`
                 }
             >
                 {icon}

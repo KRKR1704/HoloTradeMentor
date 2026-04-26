@@ -124,10 +124,10 @@ const NewsPage: React.FC = () => {
         <button
           onClick={() => fetchNews(true)}
           disabled={isLoading}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-slate-700 transition disabled:opacity-50 flex-shrink-0"
+          className={`btn ${isLoading ? 'opacity-60 cursor-wait' : 'btn-primary'}`}
         >
           <ArrowPathIcon className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-          Refresh News
+          <span className="ml-2">Refresh News</span>
         </button>
       </div>
 
@@ -142,7 +142,7 @@ const NewsPage: React.FC = () => {
           <p className="text-sm text-muted-foreground">{error}</p>
           <button
             onClick={() => fetchNews(true)}
-            className="px-5 py-2 text-sm font-medium rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground transition"
+            className="btn btn-primary"
           >
             Try Refreshing
           </button>
@@ -159,7 +159,7 @@ const NewsPage: React.FC = () => {
           </p>
           <button
             onClick={() => fetchNews(true)}
-            className="mt-2 px-5 py-2 text-sm font-medium rounded-lg bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-slate-700 transition"
+            className="btn btn-secondary mt-2"
           >
             Refresh
           </button>

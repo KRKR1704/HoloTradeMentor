@@ -36,6 +36,13 @@ interface AppState {
   isInsightModalOpen: boolean;
   lastAnalysisTime: number | null;
   portfolioAnalysisCache: string | null;
+  lastTrade: {
+    stock: { symbol: string; name?: string };
+    shares: number;
+    price: number;
+    type: TradeType;
+    timestamp: number;
+  } | null;
   marketData: MarketData;
 }
 
@@ -56,7 +63,8 @@ type Action =
   | { type: "UPDATE_MARKET_DATA"; payload: MarketData }
   | { type: "OPEN_INSIGHT_MODAL" }
   | { type: "CLOSE_INSIGHT_MODAL" }
-  | { type: "SET_PORTFOLIO_ANALYSIS"; payload: { analysis: string } };
+  | { type: "SET_PORTFOLIO_ANALYSIS"; payload: { analysis: string } }
+  | { type: "CLEAR_LAST_TRADE" };
 
 const initialMarketData = {} as MarketData;
 
@@ -79,6 +87,7 @@ const initialState: AppState = {
   isInsightModalOpen: false,
   lastAnalysisTime: null,
   portfolioAnalysisCache: null,
+  lastTrade: null,
   marketData: initialMarketData,
 };
 
@@ -127,6 +136,13 @@ const appReducer = (state: AppState, action: Action): AppState => {
           trade: action.payload.trade,
           userBeforeTrade: action.payload.userBeforeTrade,
         },
+        lastTrade: {
+          stock: { symbol: action.payload.trade.stock.symbol, name: action.payload.trade.stock.name },
+          shares: action.payload.trade.shares,
+          price: action.payload.trade.price,
+          type: action.payload.trade.type,
+          timestamp: action.payload.trade.timestamp,
+        },
       };
     case "TRADE_FAIL":
       return { ...state, isLoading: false, error: action.payload };
@@ -150,6 +166,8 @@ const appReducer = (state: AppState, action: Action): AppState => {
         portfolioAnalysisCache: action.payload.analysis,
         lastAnalysisTime: Date.now(),
       };
+    case "CLEAR_LAST_TRADE":
+      return { ...state, lastTrade: null };
     default:
       return state;
   }
