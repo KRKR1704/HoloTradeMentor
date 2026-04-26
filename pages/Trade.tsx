@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStockQuote } from '../hooks/useStockQuote';
 
@@ -14,6 +14,25 @@ const POPULAR_STOCKS = [
 ];
 
 const INDIA_EXCHANGES = new Set(['NSE', 'BSE']);
+
+// Inject price-flash keyframes once
+if (typeof document !== 'undefined' && !document.getElementById('trade-price-flash-style')) {
+  const style = document.createElement('style');
+  style.id = 'trade-price-flash-style';
+  style.textContent = `
+    @keyframes trade-flash-up {
+      0%   { background-color: rgba(52,211,153,0.35); border-radius: 4px; }
+      100% { background-color: transparent; }
+    }
+    @keyframes trade-flash-down {
+      0%   { background-color: rgba(248,113,113,0.35); border-radius: 4px; }
+      100% { background-color: transparent; }
+    }
+    .trade-flash-up   { animation: trade-flash-up   600ms ease-out forwards; }
+    .trade-flash-down { animation: trade-flash-down 600ms ease-out forwards; }
+  `;
+  document.head.appendChild(style);
+}
 
 interface SearchResult {
   symbol: string;
@@ -31,8 +50,23 @@ const PopularStockCard: React.FC<{ symbol: string; name: string; onClick: () => 
   name,
   onClick,
 }) => {
-  const { quote, loading, error } = useStockQuote(symbol);
+  const { quote, loading, error } = useStockQuote(symbol, 2_000);
   const isPositive = (quote?.change ?? 0) >= 0;
+
+  // Track previous price to determine flash direction
+  const prevPriceRef = useRef<number | null>(null);
+  const [flashClass, setFlashClass] = useState('');
+  const [flashKey, setFlashKey] = useState(0);
+
+  useEffect(() => {
+    if (quote?.price == null) return;
+    const prev = prevPriceRef.current;
+    if (prev !== null && quote.price !== prev) {
+      setFlashClass(quote.price > prev ? 'trade-flash-up' : 'trade-flash-down');
+      setFlashKey(k => k + 1);
+    }
+    prevPriceRef.current = quote.price;
+  }, [quote?.price]);
 
   return (
     <div
@@ -66,7 +100,10 @@ const PopularStockCard: React.FC<{ symbol: string; name: string; onClick: () => 
             </div>
           ) : quote ? (
             <>
-              <p className="font-semibold text-lg font-mono text-foreground">
+              <p
+                key={flashKey}
+                className={`font-semibold text-lg font-mono text-foreground px-1 ${flashClass}`}
+              >
                 ${quote.price.toFixed(2)}
               </p>
               <p className={`text-sm font-medium ${isPositive ? 'text-positive' : 'text-destructive'}`}>
@@ -184,7 +221,18 @@ const Trade: React.FC = () => {
       {/* Popular stocks (shown when search bar is empty) */}
       {!searchQuery.trim() && (
         <div className="space-y-4 animate-fade-in">
-          <h2 className="text-xl font-bold">Popular Stocks</h2>
+          {/* Section header with LIVE badge */}
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-bold">Popular Stocks</h2>
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400 bg-emerald-950/50 border border-emerald-800/50 px-2.5 py-0.5 rounded-full">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
+              </span>
+              LIVE · 2s
+            </span>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {POPULAR_STOCKS.map(({ symbol, name }) => (
               <PopularStockCard

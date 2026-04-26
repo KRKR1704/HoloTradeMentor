@@ -5,7 +5,6 @@ import { UserCircleIcon } from '../icons/UserCircleIcon';
 import { HomeIcon } from '../icons/HomeIcon';
 import { ArrowTrendingUpIcon } from '../icons/ArrowTrendingUpIcon';
 import { AcademicCapIcon } from '../icons/AcademicCapIcon';
-import { ChatBubbleIcon } from '../icons/ChatBubbleIcon';
 import { NewspaperIcon } from '../icons/NewspaperIcon';
 
 const NavItem = ({ to, icon, label, isMobile = false }: { to: string; icon: React.ReactNode; label: string; isMobile?: boolean }) => {
@@ -18,7 +17,7 @@ const NavItem = ({ to, icon, label, isMobile = false }: { to: string; icon: Reac
              <NavLink
                 to={to}
                 className={({ isActive }) =>
-                    `${baseClasses} flex-col w-full h-16 ${isActive ? activeClass : inactiveClass}`
+                    `${baseClasses} flex-col w-full h-16 px-2 ${isActive ? activeClass : inactiveClass}`
                 }
             >
                 {icon}

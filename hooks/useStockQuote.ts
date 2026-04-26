@@ -1,13 +1,12 @@
 import { useState, useEffect } from 'react';
 
 const BACKEND = 'http://localhost:8000';
-const POLL_INTERVAL_MS = 30_000;
 
 export interface QuoteData {
   price: number;
   change: number;
   changePercent: number;
-  volume: number;
+  volume?: number;   // not available from Finnhub quote endpoint; present from mock data
   isMock: boolean;
   name?: string;
 }
@@ -19,7 +18,7 @@ interface UseStockQuoteResult {
   updatedAt: Date | null;
 }
 
-export function useStockQuote(symbol: string): UseStockQuoteResult {
+export function useStockQuote(symbol: string, pollIntervalMs = 30_000): UseStockQuoteResult {
   const [quote, setQuote] = useState<QuoteData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +42,7 @@ export function useStockQuote(symbol: string): UseStockQuoteResult {
             price: parseFloat(data.price),
             change: parseFloat(data.change),
             changePercent: parseFloat(data.change_percent),
-            volume: parseInt(data.volume, 10),
+            volume: data.volume != null ? parseInt(data.volume, 10) : undefined,
             isMock: data.is_mock === true,
             name: data.name ?? undefined,
           });
@@ -63,13 +62,13 @@ export function useStockQuote(symbol: string): UseStockQuoteResult {
     setUpdatedAt(null);
 
     fetchQuote();
-    const id = setInterval(fetchQuote, POLL_INTERVAL_MS);
+    const id = setInterval(fetchQuote, pollIntervalMs);
 
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [symbol]);
+  }, [symbol, pollIntervalMs]);
 
   return { quote, loading, error, updatedAt };
 }

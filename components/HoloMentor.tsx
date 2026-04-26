@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useAppContext } from '../context/AppContext';
 import { parseGlossaryTerms } from '../utils/parseGlossaryTerms';
 
 const BACKEND = 'http://localhost:8000';
@@ -24,10 +25,10 @@ interface HoloMentorProps {
 }
 
 const QUICK_QUESTIONS = [
-  'What is volatility?',
-  'Explain this candle',
-  'Is this stock risky?',
-  'What does volume mean?',
+  'Teach me about this chart',
+  'What pattern do you see?',
+  'Explain support & resistance',
+  'Quiz me on what I see',
 ];
 
 function uid() {
@@ -38,27 +39,8 @@ function formatTime(d: Date) {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-async function fetchOhlcSummary(symbol: string, interval: Interval): Promise<string> {
-  try {
-    const res = await fetch(
-      `${BACKEND}/api/candles/${encodeURIComponent(symbol)}?interval=${interval}`
-    );
-    if (!res.ok) return `Symbol: ${symbol}, Interval: ${interval} (chart data unavailable)`;
-    const json = await res.json();
-    const candles: any[] = json.candles ?? [];
-    const last5 = candles.slice(-5);
-    if (!last5.length) return `Symbol: ${symbol}, no recent candle data`;
-    const rows = last5
-      .map(
-        (c) =>
-          `${c.time}  O:$${Number(c.open).toFixed(2)} H:$${Number(c.high).toFixed(2)} L:$${Number(c.low).toFixed(2)} C:$${Number(c.close).toFixed(2)}`
-      )
-      .join('\n');
-    return `Last 5 candles for ${symbol} (${interval}):\n${rows}`;
-  } catch {
-    return `Symbol: ${symbol}, Interval: ${interval}`;
-  }
-}
+// OHLC summary is now fetched server-side by the backend (uses the 60s candle cache).
+// Frontend just sends symbol + interval — no extra round-trip before streaming starts.
 
 async function* streamText(res: Response): AsyncGenerator<string> {
   if (!res.body) return;
@@ -295,6 +277,29 @@ export const HoloMentor: React.FC<HoloMentorProps> = ({
     lastAlertedChangeRef.current = null;
   }, [symbol]);
 
+  // React to recent trades so Holo can teach the user about their trade
+  const { state: appState, dispatch: appDispatch } = useAppContext();
+  useEffect(() => {
+    const lt = appState.lastTrade;
+    if (!lt) return;
+    // Only react when the trade involves the currently-open symbol
+    if (lt.stock?.symbol !== symbol) return;
+
+    const action = lt.type === 0 ? 'bought' : 'sold';
+    const question = `I just ${action} ${lt.shares} shares of ${lt.stock.symbol} at $${lt.price.toFixed(2)}. As a beginner, explain what this trade means for my portfolio and what I should watch next.`;
+
+    // Fire a short mentor explanation specifically about the trade
+    streamIntoNewBubble(
+      `${BACKEND}/api/mentor/explain`,
+      { symbol, interval, question },
+      '🎓 Trade Review'
+    );
+
+    // Clear the flag so we don't repeat this message
+    appDispatch({ type: 'CLEAR_LAST_TRADE' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appState.lastTrade, symbol, interval]);
+
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
       if (scrollRef.current) {
@@ -375,23 +380,24 @@ export const HoloMentor: React.FC<HoloMentorProps> = ({
     [scrollToBottom]
   );
 
-  // Auto-explain on symbol / interval change, or after Clear Chat
+  // Auto-explain on symbol / interval change, or after Clear Chat.
+  // setTimeout(0) + cancelled flag prevents React 18 Strict Mode double-fire.
   useEffect(() => {
     if (!symbol) return;
     let cancelled = false;
-
-    const autoExplain = async () => {
-      const ohlcSummary = await fetchOhlcSummary(symbol, interval);
-      if (cancelled) return;
-      await streamIntoNewBubble(
-        `${BACKEND}/api/mentor/explain`,
-        { symbol, interval, ohlc_summary: ohlcSummary, question: null },
-        '📊 Chart Analysis'
-      );
+    const id = setTimeout(() => {
+      if (!cancelled) {
+        streamIntoNewBubble(
+          `${BACKEND}/api/mentor/explain`,
+          { symbol, interval, question: null },
+          '📊 Chart Analysis'
+        );
+      }
+    }, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
     };
-
-    autoExplain();
-    return () => { cancelled = true; };
     // explainKey is intentionally included — it re-fires after Clear Chat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, interval, explainKey]);
@@ -416,18 +422,15 @@ export const HoloMentor: React.FC<HoloMentorProps> = ({
     const direction = liveChangePercent > prevChange ? 'up' : 'down';
     const magnitude = delta.toFixed(2);
 
-    fetchOhlcSummary(symbol, interval).then((ohlcSummary) => {
-      streamIntoNewBubble(
-        `${BACKEND}/api/mentor/explain`,
-        {
-          symbol,
-          interval,
-          ohlc_summary: ohlcSummary,
-          question: `The price just moved ${direction} by ${magnitude}% since my last update (now ${liveChangePercent.toFixed(2)}% from the previous close). In 2-3 sentences, what might a move like this mean for a beginner investor to understand?`,
-        },
-        '⚡ Price Update'
-      );
-    });
+    streamIntoNewBubble(
+      `${BACKEND}/api/mentor/explain`,
+      {
+        symbol,
+        interval,
+        question: `The price just moved ${direction} by ${magnitude}% since my last update (now ${liveChangePercent.toFixed(2)}% from the previous close). In 2-3 sentences, what might a move like this mean for a beginner investor to understand?`,
+      },
+      '⚡ Price Update'
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveChangePercent]);
 
@@ -463,11 +466,9 @@ export const HoloMentor: React.FC<HoloMentorProps> = ({
           content: m.content,
         }));
 
-        fetchOhlcSummary(symbol, interval).then((ohlcSummary) => {
-          streamIntoNewBubble(`${BACKEND}/api/mentor/chat`, {
-            messages: apiHistory,
-            context: { symbol, interval, ohlc_summary: ohlcSummary },
-          });
+        streamIntoNewBubble(`${BACKEND}/api/mentor/chat`, {
+          messages: apiHistory,
+          context: { symbol, interval },
         });
 
         return updated;
@@ -562,24 +563,23 @@ export const HoloMentor: React.FC<HoloMentorProps> = ({
         className="flex items-center gap-2 px-4 py-3 flex-shrink-0 border-t"
         style={{ borderColor: '#00BFA622' }}
       >
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask Holo anything about this chart…"
-          disabled={isBusy}
-          className="flex-1 bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-500 transition disabled:opacity-50"
-        />
-        <button
-          type="submit"
-          disabled={isBusy || !input.trim()}
-          className="flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center transition-opacity disabled:opacity-30"
-          style={{ background: 'linear-gradient(135deg, #00BFA6, #007a6e)' }}
-        >
-          <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.269 20.876L5.999 12zm0 0h7.5" />
-          </svg>
-        </button>
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask Holo to teach you something…"
+            disabled={isBusy}
+            className="flex-1 bg-card border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-500 transition disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={isBusy || !input.trim()}
+            className={`btn btn-primary flex-shrink-0 w-9 h-9 ${isBusy || !input.trim() ? 'opacity-60' : ''}`}
+          >
+            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.269 20.876L5.999 12zm0 0h7.5" />
+            </svg>
+          </button>
       </form>
 
       {/* Disclaimer */}

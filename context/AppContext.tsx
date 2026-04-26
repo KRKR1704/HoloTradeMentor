@@ -4,6 +4,7 @@ import React, {
   useReducer,
   ReactNode,
   useEffect,
+  useMemo,
 } from "react";
 import {
   User,
@@ -16,6 +17,8 @@ import {
 import { STARTING_BALANCE } from "../constants";
 import { getStockQuote } from "../services/stockService";
 import { fetchCurrentUser } from "../services/userService";
+
+const BACKEND = "http://localhost:8000";
 
 // FIX: Define and export PriceAlert interface to resolve import error in PriceAlertModal.tsx.
 export interface PriceAlert {
@@ -35,6 +38,13 @@ interface AppState {
   isInsightModalOpen: boolean;
   lastAnalysisTime: number | null;
   portfolioAnalysisCache: string | null;
+  lastTrade: {
+    stock: { symbol: string; name?: string };
+    shares: number;
+    price: number;
+    type: TradeType;
+    timestamp: number;
+  } | null;
   marketData: MarketData;
 }
 
@@ -56,7 +66,8 @@ type Action =
   | { type: "UPDATE_MARKET_DATA"; payload: MarketData }
   | { type: "OPEN_INSIGHT_MODAL" }
   | { type: "CLOSE_INSIGHT_MODAL" }
-  | { type: "SET_PORTFOLIO_ANALYSIS"; payload: { analysis: string } };
+  | { type: "SET_PORTFOLIO_ANALYSIS"; payload: { analysis: string } }
+  | { type: "CLEAR_LAST_TRADE" };
 
 const initialMarketData = {} as MarketData;
 
@@ -79,6 +90,7 @@ const initialState: AppState = {
   isInsightModalOpen: false,
   lastAnalysisTime: null,
   portfolioAnalysisCache: null,
+  lastTrade: null,
   marketData: initialMarketData,
 };
 
@@ -135,6 +147,13 @@ const appReducer = (state: AppState, action: Action): AppState => {
           trade: action.payload.trade,
           userBeforeTrade: action.payload.userBeforeTrade,
         },
+        lastTrade: {
+          stock: { symbol: action.payload.trade.stock.symbol, name: action.payload.trade.stock.name },
+          shares: action.payload.trade.shares,
+          price: action.payload.trade.price,
+          type: action.payload.trade.type,
+          timestamp: action.payload.trade.timestamp,
+        },
       };
     case "TRADE_FAIL":
       return { ...state, isLoading: false, error: action.payload };
@@ -146,7 +165,8 @@ const appReducer = (state: AppState, action: Action): AppState => {
     case "CLOSE_TRADE_FEEDBACK":
       return { ...state, tradeFeedback: null };
     case "UPDATE_MARKET_DATA":
-      return { ...state, marketData: action.payload };
+      // Merge into existing prices — never wipe prices during SSE reconnect gaps
+      return { ...state, marketData: { ...state.marketData, ...action.payload } };
     case "OPEN_INSIGHT_MODAL":
       return { ...state, isInsightModalOpen: true };
     case "CLOSE_INSIGHT_MODAL":
@@ -157,6 +177,8 @@ const appReducer = (state: AppState, action: Action): AppState => {
         portfolioAnalysisCache: action.payload.analysis,
         lastAnalysisTime: Date.now(),
       };
+    case "CLEAR_LAST_TRADE":
+      return { ...state, lastTrade: null };
     default:
       return state;
   }
@@ -167,108 +189,45 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({
 }) => {
   const [state, dispatch] = useReducer(appReducer, initialState);
 
-  // Fetch initial market data and update periodically
-  useEffect(() => {
-    const loadUser = async () => {
-      dispatch({ type: "AUTH_LOADING" });
-      const user = await fetchCurrentUser();
-      if (user) {
-        dispatch({ type: "LOAD_USER_SUCCESS", payload: user });
-      } else {
-        dispatch({ type: "AUTH_FAIL", payload: "Unable to load user profile." });
-      }
-    };
-
-    loadUser();
-  }, []);
-
-  useEffect(() => {
-    const fetchMarketData = async () => {
-      const staticSymbols = [
-        "AAPL",
-        "GOOGL",
-        "MSFT",
-        "AMZN",
-        "TSLA",
-        "NVDA",
-        "META",
-        "IBM",
-        "ORCL",
-        "ADBE",
-        "CRM",
-        "INTC",
-        "QCOM",
-        "CSCO",
-        "SAP",
-        "JPM",
-        "V",
-        "BAC",
-        "WFC",
-        "GS",
-        "C",
-        "BRK-B",
-        "AXP",
-        "SCHW",
-        "JNJ",
-        "PFE",
-        "UNH",
-        "LLY",
-        "MRK",
-        "ABBV",
-        "TMO",
-        "NKE",
-        "MCD",
-        "SBUX",
-        "HD",
-        "LOW",
-        "F",
-        "GM",
-        "WMT",
-        "PG",
-        "KO",
-        "PEP",
-        "COST",
-        "TGT",
-        "BA",
-        "CAT",
-        "HON",
-        "UPS",
-        "LMT",
-        "XOM",
-        "CVX",
-        "DIS",
-        "VZ",
-        "T",
-        "NFLX",
-      ];
-
-      const portfolioSymbols = state.currentUser?.portfolio.map((item) => item.stock.symbol) ?? [];
-      const symbols = Array.from(new Set([...staticSymbols, ...portfolioSymbols]));
-      const newMarketData: MarketData = {};
-
-      for (const symbol of symbols) {
-        try {
-          const quote = await getStockQuote(symbol);
-          if (quote) {
-            newMarketData[symbol] = quote.price;
-          }
-        } catch {
-          // Skip failed quotes
-        }
-      }
-
-      if (Object.keys(newMarketData).length > 0) {
-        dispatch({ type: "UPDATE_MARKET_DATA", payload: newMarketData });
-      }
-    };
-
-    fetchMarketData();
-
-    // Update prices every 30 seconds
-    const marketInterval = setInterval(fetchMarketData, 30000);
-
-    return () => clearInterval(marketInterval);
+  // Stable comma-separated symbol string — only changes when holdings change
+  const portfolioSymbols = useMemo(() => {
+    const syms = [
+      ...new Set(
+        (state.currentUser?.portfolio ?? []).map((item) => item.stock.symbol)
+      ),
+    ].sort();
+    return syms.join(",");
   }, [state.currentUser?.portfolio]);
+
+  // SSE stream — server pushes prices as fast as yfinance fetches them (~1.5s)
+  useEffect(() => {
+    if (!portfolioSymbols) return;
+
+    const url = `${BACKEND}/api/prices/stream?symbols=${portfolioSymbols}`;
+    const source = new EventSource(url);
+
+    source.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as Record<
+          string,
+          { price: number; change: number; change_percent: number; is_mock: boolean }
+        >;
+        if ("error" in data) return;
+        const newMarketData: MarketData = {};
+        for (const [sym, info] of Object.entries(data)) {
+          newMarketData[sym] = info.price;
+        }
+        if (Object.keys(newMarketData).length > 0) {
+          dispatch({ type: "UPDATE_MARKET_DATA", payload: newMarketData });
+        }
+      } catch {
+        // malformed event — ignore
+      }
+    };
+
+    // EventSource auto-reconnects on error; nothing extra needed
+    return () => source.close();
+  }, [portfolioSymbols]);
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>
@@ -363,6 +322,9 @@ export const executeTrade = async (
       type: "TRADE_SUCCESS",
       payload: { trade: newTrade, updatedUser, userBeforeTrade },
     });
+    // Immediately seed marketData with the trade price so Dashboard recomputes
+    // without waiting for the next SSE push
+    dispatch({ type: "UPDATE_MARKET_DATA", payload: { [stock.symbol]: currentPrice } });
   } else {
     // SELL
     const existingHolding = userBeforeTrade.portfolio.find(
@@ -404,5 +366,6 @@ export const executeTrade = async (
       type: "TRADE_SUCCESS",
       payload: { trade: newTrade, updatedUser, userBeforeTrade },
     });
+    dispatch({ type: "UPDATE_MARKET_DATA", payload: { [stock.symbol]: currentPrice } });
   }
 };
