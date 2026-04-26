@@ -1,6 +1,6 @@
 {
-  "name": "Tyche: AI Stock Trading Simulator",
-  "description": "An educational, interactive stock trading simulation app that uses virtual money and real-time stock data for learning. Features an AI assistant powered by Gemini to provide personalized explanations and trading insights.",
+  "name": "HoloTradeMentor: AI Stock Trading Simulator",
+  "description": "An educational, interactive stock trading simulation app that uses virtual money and real-time stock data for learning. Features an AI assistant powered by Antropic's Claude modelto provide personalized explanations and trading insights.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

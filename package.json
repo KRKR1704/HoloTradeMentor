@@ -1,5 +1,5 @@
 {
-  "name": "tyche-ai-stock-trading-simulator",
+  "name": "holotradementor",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@google/genai": "^1.21.0",
     "lightweight-charts": "^5.2.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
@@ -21,7 +20,6 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.0",
-    "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }
 }

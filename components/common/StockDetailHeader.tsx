@@ -1,29 +1,28 @@
-import React from 'react';
-import { Stock } from '../../types';
-import { MOCK_STOCKS } from '../../constants';
-import { useStockQuote } from '../../hooks/useStockQuote';
+import React from "react";
+import { Stock } from "../../types";
+import { useStockQuote } from "../../hooks/useStockQuote";
 
 export const StockDetailHeader: React.FC<{ stock: Stock }> = ({ stock }) => {
   const { quote, loading, error } = useStockQuote(stock.symbol);
 
-  // Fall back to mock-derived change when live data isn't available yet
-  const baseStockData = MOCK_STOCKS.find(s => s.symbol === stock.symbol);
-  const previousClose = baseStockData?.previousClose ?? stock.price;
-
   const price = quote?.price ?? stock.price;
-  const change = quote ? quote.change : price - previousClose;
-  const changePercent = quote ? quote.changePercent : ((price - previousClose) / previousClose) * 100;
+  const change = quote?.change ?? 0;
+  const changePercent = quote?.changePercent ?? 0;
   const isPositive = change >= 0;
-  const arrow = isPositive ? '▲' : '▼';
+  const arrow = isPositive ? "▲" : "▼";
 
   return (
     <div>
       <div className="flex items-center gap-2">
-        <h2 className="text-2xl font-bold">{stock.name} ({stock.symbol})</h2>
+        <h2 className="text-2xl font-bold">
+          {stock.name} ({stock.symbol})
+        </h2>
 
         {/* Live / Simulated / Error indicator */}
-        {!error && !loading && quote && (
-          quote.isMock ? (
+        {!error &&
+          !loading &&
+          quote &&
+          (quote.isMock ? (
             <span className="text-xs text-amber-500 bg-amber-950/40 border border-amber-800/50 px-2 py-0.5 rounded-full">
               Simulated
             </span>
@@ -35,8 +34,7 @@ export const StockDetailHeader: React.FC<{ stock: Stock }> = ({ stock }) => {
               </span>
               LIVE
             </span>
-          )
-        )}
+          ))}
         {error && (
           <span className="text-xs text-slate-500 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded-full">
             Data unavailable
@@ -56,9 +54,17 @@ export const StockDetailHeader: React.FC<{ stock: Stock }> = ({ stock }) => {
             <p className="text-4xl font-bold font-mono text-foreground">
               ${price.toFixed(2)}
             </p>
-            <div className={`text-xl font-semibold ${isPositive ? 'text-positive' : 'text-destructive'}`}>
-              <span>{arrow} {isPositive ? '+' : ''}{change.toFixed(2)}</span>
-              <span className="ml-2">({isPositive ? '+' : ''}{changePercent.toFixed(2)}%)</span>
+            <div
+              className={`text-xl font-semibold ${isPositive ? "text-positive" : "text-destructive"}`}
+            >
+              <span>
+                {arrow} {isPositive ? "+" : ""}
+                {change.toFixed(2)}
+              </span>
+              <span className="ml-2">
+                ({isPositive ? "+" : ""}
+                {changePercent.toFixed(2)}%)
+              </span>
             </div>
           </div>
           {quote?.volume != null && (
