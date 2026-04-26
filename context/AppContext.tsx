@@ -4,6 +4,7 @@ import React, {
   useReducer,
   ReactNode,
   useEffect,
+  useMemo,
 } from "react";
 import {
   User,
@@ -14,7 +15,8 @@ import {
   MarketData,
 } from "../types";
 import { STARTING_BALANCE } from "../constants";
-import { getStockQuote } from "../services/stockService";
+
+const BACKEND = "http://localhost:8000";
 
 // FIX: Define and export PriceAlert interface to resolve import error in PriceAlertModal.tsx.
 export interface PriceAlert {
@@ -136,7 +138,8 @@ const appReducer = (state: AppState, action: Action): AppState => {
     case "CLOSE_TRADE_FEEDBACK":
       return { ...state, tradeFeedback: null };
     case "UPDATE_MARKET_DATA":
-      return { ...state, marketData: action.payload };
+      // Merge into existing prices — never wipe prices during SSE reconnect gaps
+      return { ...state, marketData: { ...state.marketData, ...action.payload } };
     case "OPEN_INSIGHT_MODAL":
       return { ...state, isInsightModalOpen: true };
     case "CLOSE_INSIGHT_MODAL":
@@ -157,39 +160,45 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({
 }) => {
   const [state, dispatch] = useReducer(appReducer, initialState);
 
-  // Fetch prices for portfolio holdings in parallel, refresh every 30s
+  // Stable comma-separated symbol string — only changes when holdings change
+  const portfolioSymbols = useMemo(() => {
+    const syms = [
+      ...new Set(
+        (state.currentUser?.portfolio ?? []).map((item) => item.stock.symbol)
+      ),
+    ].sort();
+    return syms.join(",");
+  }, [state.currentUser?.portfolio]);
+
+  // SSE stream — server pushes prices as fast as yfinance fetches them (~1.5s)
   useEffect(() => {
-    const fetchMarketData = async () => {
-      const portfolio = state.currentUser?.portfolio ?? [];
-      if (portfolio.length === 0) return;
+    if (!portfolioSymbols) return;
 
-      // Deduplicate symbols and fetch all in parallel
-      const symbols = [...new Set(portfolio.map((item) => item.stock.symbol))];
+    const url = `${BACKEND}/api/prices/stream?symbols=${portfolioSymbols}`;
+    const source = new EventSource(url);
 
-      const results = await Promise.allSettled(
-        symbols.map((symbol) => getStockQuote(symbol))
-      );
-
-      const newMarketData: MarketData = {};
-      results.forEach((result, i) => {
-        if (result.status === "fulfilled" && result.value) {
-          newMarketData[symbols[i]] = result.value.price;
+    source.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as Record<
+          string,
+          { price: number; change: number; change_percent: number; is_mock: boolean }
+        >;
+        if ("error" in data) return;
+        const newMarketData: MarketData = {};
+        for (const [sym, info] of Object.entries(data)) {
+          newMarketData[sym] = info.price;
         }
-      });
-
-      if (Object.keys(newMarketData).length > 0) {
-        dispatch({ type: "UPDATE_MARKET_DATA", payload: newMarketData });
+        if (Object.keys(newMarketData).length > 0) {
+          dispatch({ type: "UPDATE_MARKET_DATA", payload: newMarketData });
+        }
+      } catch {
+        // malformed event — ignore
       }
     };
 
-    fetchMarketData();
-
-    // Update prices every 4 seconds
-    const marketInterval = setInterval(fetchMarketData, 4000);
-
-    return () => clearInterval(marketInterval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.currentUser?.portfolio]);
+    // EventSource auto-reconnects on error; nothing extra needed
+    return () => source.close();
+  }, [portfolioSymbols]);
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>
@@ -282,6 +291,9 @@ export const executeTrade = async (
       type: "TRADE_SUCCESS",
       payload: { trade: newTrade, updatedUser, userBeforeTrade },
     });
+    // Immediately seed marketData with the trade price so Dashboard recomputes
+    // without waiting for the next SSE push
+    dispatch({ type: "UPDATE_MARKET_DATA", payload: { [stock.symbol]: currentPrice } });
   } else {
     // SELL
     const existingHolding = userBeforeTrade.portfolio.find(
@@ -323,5 +335,6 @@ export const executeTrade = async (
       type: "TRADE_SUCCESS",
       payload: { trade: newTrade, updatedUser, userBeforeTrade },
     });
+    dispatch({ type: "UPDATE_MARKET_DATA", payload: { [stock.symbol]: currentPrice } });
   }
 };

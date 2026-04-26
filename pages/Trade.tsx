@@ -50,7 +50,7 @@ const PopularStockCard: React.FC<{ symbol: string; name: string; onClick: () => 
   name,
   onClick,
 }) => {
-  const { quote, loading, error } = useStockQuote(symbol, 4_000);
+  const { quote, loading, error } = useStockQuote(symbol, 2_000);
   const isPositive = (quote?.change ?? 0) >= 0;
 
   // Track previous price to determine flash direction
@@ -229,7 +229,7 @@ const Trade: React.FC = () => {
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
               </span>
-              LIVE · 4s
+              LIVE · 2s
             </span>
           </div>
 

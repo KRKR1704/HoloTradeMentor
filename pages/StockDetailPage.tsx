@@ -158,7 +158,7 @@ const StockDetailPage: React.FC = () => {
   const [shares, setShares] = useState(1);
   const [isTrading, setIsTrading] = useState(false);
 
-  const { quote, loading, error, updatedAt } = useStockQuote(symbol, 4_000);
+  const { quote, loading, error, updatedAt } = useStockQuote(symbol, 2_000);
 
   const userHolding = useMemo(
     () => currentUser?.portfolio.find((p) => p.stock.symbol === symbol),

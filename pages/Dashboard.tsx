@@ -47,23 +47,33 @@ const LiveStatCard: React.FC<{
 
   useEffect(() => {
     const prev = prevRef.current;
-    if (prev !== null && rawValue !== prev) {
+    // Flash on ANY numeric change (including first render after a trade)
+    if (prev !== null && Math.abs(rawValue - prev) > 0.001) {
       setFlashClass(rawValue > prev ? 'dash-flash-up' : 'dash-flash-down');
       setFlashKey(k => k + 1);
       setUpdatedAt(new Date());
     }
+    // Always record on first render so subsequent changes always flash
     prevRef.current = rawValue;
   }, [rawValue]);
+
+  // Seconds counter shown when no update yet
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div className="bg-card border border-slate-800 rounded-lg p-4 sm:p-6 shadow-sm">
       <div className="flex items-center justify-between gap-2 mb-1">
         <h3 className="text-muted-foreground text-sm">{title}</h3>
-        {updatedAt && (
-          <span className="text-[10px] text-slate-500">
-            ↻ {updatedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
-          </span>
-        )}
+        <span className="text-[10px] text-slate-500">
+          {updatedAt
+            ? `↻ ${updatedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
+            : <span className="animate-pulse">● live</span>
+          }
+        </span>
       </div>
       <p key={flashKey} className={`text-2xl font-bold font-mono ${flashClass} ${className ?? ''}`}>
         {value}
@@ -122,24 +132,24 @@ const Dashboard: React.FC = () => {
   const { state } = useAppContext();
   const { currentUser, marketData } = state;
 
-  const portfolioWithData = useMemo(() => {
-    if (!currentUser) return [];
-    return currentUser.portfolio.map(item => {
-      const currentPrice = marketData[item.stock.symbol] ?? item.stock.price;
-      const totalValue   = currentPrice * item.shares;
-      const totalCost    = item.avgCost * item.shares;
-      const totalPandL   = totalValue - totalCost;
-      const totalPandLPct = totalCost > 0 ? (totalPandL / totalCost) * 100 : 0;
-      return { ...item, currentPrice, totalValue, totalPandL, totalPandLPct };
-    });
-  }, [currentUser?.portfolio, marketData]);
+  const { portfolioWithData, portfolioValue, totalPandL } = useMemo(() => {
+    if (!currentUser) return { portfolioWithData: [] as PortfolioItemWithData[], portfolioValue: 0, totalPandL: 0 };
 
-  const { portfolioValue, totalPandL } = useMemo(() => {
-    if (!currentUser) return { portfolioValue: 0, totalPandL: 0 };
-    const portfolioValue = portfolioWithData.reduce((acc, item) => acc + item.totalValue, 0);
-    const totalCost      = currentUser.portfolio.reduce((acc, item) => acc + item.avgCost * item.shares, 0);
-    return { portfolioValue, totalPandL: portfolioValue - totalCost };
-  }, [portfolioWithData, currentUser?.portfolio]);
+    const pw = currentUser.portfolio.map(item => {
+      const currentPrice = marketData[item.stock.symbol] ?? item.stock.price;
+      const totalValue = currentPrice * item.shares;
+      const totalCost = item.avgCost * item.shares;
+      const totalPandL = totalValue - totalCost;
+      const totalPandLPct = totalCost > 0 ? (totalPandL / totalCost) * 100 : 0;
+      return { ...item, currentPrice, totalValue, totalPandL, totalPandLPct } as PortfolioItemWithData;
+    });
+
+    const pv = pw.reduce((acc, item) => acc + item.totalValue, 0);
+    const totalCostAll = currentUser.portfolio.reduce((acc, item) => acc + item.avgCost * item.shares, 0);
+    const tpl = pv - totalCostAll;
+
+    return { portfolioWithData: pw, portfolioValue: pv, totalPandL: tpl };
+  }, [currentUser, marketData]);
 
   if (!currentUser) return null;
 
@@ -157,7 +167,7 @@ const Dashboard: React.FC = () => {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
             </span>
-            LIVE · 4s
+            LIVE
           </span>
         )}
       </div>

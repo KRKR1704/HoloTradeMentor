@@ -7,6 +7,9 @@ import random
 import hashlib
 import httpx
 import anthropic
+import yfinance as yf
+import pandas as pd
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -17,12 +20,15 @@ from datetime import datetime, timezone, timedelta
 
 load_dotenv()
 
-FINNHUB_API_KEY  = os.getenv("FINNHUB_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-AV_API_KEY        = os.getenv("AV_API_KEY")
 
-FINNHUB_BASE = "https://finnhub.io/api/v1"
-AV_BASE_URL  = "https://www.alphavantage.co/query"
+# Thread pool for yfinance (synchronous library — run off the async event loop)
+_YF_EXECUTOR = ThreadPoolExecutor(max_workers=12)
+
+# Server-side random walk — keeps prices moving for demo even when market is closed.
+# Seeded from real yfinance price; drifts ±0.2% per cycle, bounded within ±3%.
+_WALK_PRICES: dict[str, float] = {}   # symbol → current walk price
+_WALK_BASE:   dict[str, float] = {}   # symbol → base price (for bounding)
 
 HOLO_SYSTEM_PROMPT = """You are Holo, a personal stock market mentor inside HoloTrade Mentor. You are coaching a complete beginner who wants to genuinely understand investing — not just get answers.
 
@@ -303,59 +309,120 @@ async def clear_news_cache():
     return {"cleared": True, "message": "News cache cleared"}
 
 
+# ── yfinance sync helpers (run in thread pool) ────────────────────────────────
+
+def _yf_fetch_quote_sync(symbol: str) -> dict:
+    """Fetch live quote via yfinance. Returns dict or raises."""
+    ticker = yf.Ticker(symbol)
+    fi = ticker.fast_info
+    price = fi.last_price
+    prev  = fi.previous_close
+    if price is None or float(price) == 0:
+        raise ValueError(f"No price data for {symbol!r}")
+    price = float(price)
+    prev  = float(prev) if prev else price
+    change = round(price - prev, 4)
+    pct    = round(change / prev * 100, 4) if prev else 0.0
+    vol    = None
+    try:
+        v = fi.three_month_average_volume
+        if v:
+            vol = int(v)
+    except Exception:
+        pass
+    return {"price": price, "change": change, "change_pct": pct, "volume": vol}
+
+
+def _yf_fetch_name_sync(symbol: str) -> str:
+    """Fetch company long name (slow — only called once, cached 1hr)."""
+    try:
+        info = yf.Ticker(symbol).info
+        return info.get("longName") or info.get("shortName") or symbol.upper()
+    except Exception:
+        return symbol.upper()
+
+
+def _yf_fetch_candles_sync(symbol: str, interval: str) -> list:
+    """Fetch OHLCV history via yfinance. Returns list of candle dicts."""
+    ticker = yf.Ticker(symbol)
+    if interval == "5min":
+        hist = ticker.history(period="2d", interval="5m")
+        fmt  = "%Y-%m-%d %H:%M:%S"
+    else:
+        hist = ticker.history(period="6mo", interval="1d")
+        fmt  = "%Y-%m-%d"
+
+    candles = []
+    for ts, row in hist.iterrows():
+        try:
+            time_str = ts.strftime(fmt)
+        except Exception:
+            time_str = str(ts)[:10] if interval == "1day" else str(ts)[:19]
+        o = float(row["Open"])  if not pd.isna(row["Open"])  else 0.0
+        h = float(row["High"])  if not pd.isna(row["High"])  else 0.0
+        l = float(row["Low"])   if not pd.isna(row["Low"])   else 0.0
+        c = float(row["Close"]) if not pd.isna(row["Close"]) else 0.0
+        v = int(row["Volume"])  if not pd.isna(row["Volume"]) else 0
+        if o > 0 and c > 0:
+            candles.append({
+                "time":   time_str,
+                "open":   round(o, 4),
+                "high":   round(h, 4),
+                "low":    round(l, 4),
+                "close":  round(c, 4),
+                "volume": v,
+            })
+    return candles
+
+
 # ── Symbol Search ─────────────────────────────────────────────────────────────
 
 @app.get("/api/search")
 async def search_symbols(query: str = ""):
     if not query.strip():
         return []
-
-    if FINNHUB_API_KEY:
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(
-                    f"{FINNHUB_BASE}/search",
-                    params={"q": query, "token": FINNHUB_API_KEY},
-                )
-            data = resp.json()
-
-            results = []
-            for item in data.get("result", []):
-                item_type = item.get("type", "")
-                if item_type not in ("Common Stock", "ETP"):
-                    continue
-
-                sym      = item.get("symbol", "")
-                has_dot  = "." in sym   # Finnhub uses dots for non-US exchanges
-                exchange = "NSE/BSE — may have limited data" if has_dot else ""
-
-                results.append({
-                    "symbol":         sym,
-                    "name":           item.get("description", sym),
-                    "display_symbol": item.get("displaySymbol", sym),
-                    "exchange":       exchange,
-                    "type":           item_type,
-                })
-
-                if len(results) >= 8:
-                    break
-
-            return results
-
-        except Exception:
-            pass  # fall through to mock
-
-    # Mock fallback: fuzzy match against known symbols/names
-    q = query.upper()
-    results = []
-    for sym, name in _COMPANY_NAMES.items():
-        if q in sym or q in name.upper():
+    try:
+        # Yahoo Finance search — no API key required
+        url = "https://query1.finance.yahoo.com/v1/finance/search"
+        params = {
+            "q":           query,
+            "lang":        "en-US",
+            "region":      "US",
+            "quotesCount": 8,
+            "newsCount":   0,
+        }
+        headers = {"User-Agent": "Mozilla/5.0"}
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url, params=params, headers=headers)
+        data = resp.json()
+        results = []
+        for q in data.get("quotes", []):
+            qt = q.get("quoteType", "")
+            if qt not in ("EQUITY", "ETF"):
+                continue
+            sym  = q.get("symbol", "")
+            name = q.get("longname") or q.get("shortname") or sym
             results.append({
                 "symbol":         sym,
                 "name":           name,
                 "display_symbol": sym,
-                "exchange":       "NASDAQ",
-                "type":           "Common Stock",
+                "exchange":       q.get("exchange", ""),
+                "type":           "Common Stock" if qt == "EQUITY" else "ETF",
+            })
+            if len(results) >= 8:
+                break
+        return results
+    except Exception:
+        pass
+
+    # Fuzzy fallback against known symbols
+    q_up = query.upper()
+    results = []
+    for sym, name in _COMPANY_NAMES.items():
+        if q_up in sym or q_up in name.upper():
+            results.append({
+                "symbol": sym, "name": name,
+                "display_symbol": sym, "exchange": "NASDAQ", "type": "Common Stock",
             })
     return results[:8]
 
@@ -364,60 +431,128 @@ async def search_symbols(query: str = ""):
 
 @app.get("/api/quote/{symbol}")
 async def get_quote(symbol: str):
-    if FINNHUB_API_KEY:
-        try:
-            now = time.time()
-            cached = _PROFILE_CACHE.get(symbol.upper())
-            profile_fresh = cached and (now - cached[0]) < PROFILE_CACHE_TTL
+    sym_upper = symbol.upper()
+    loop = asyncio.get_event_loop()
 
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                if profile_fresh:
-                    # Profile already cached — only hit the quote endpoint
-                    q_resp = await client.get(
-                        f"{FINNHUB_BASE}/quote",
-                        params={"symbol": symbol, "token": FINNHUB_API_KEY},
+    # Resolve company name (cached 1hr; instant for known symbols)
+    now = time.time()
+    cached_profile = _PROFILE_CACHE.get(sym_upper)
+    if cached_profile and (now - cached_profile[0]) < PROFILE_CACHE_TTL:
+        name = cached_profile[1].get("name", sym_upper)
+    else:
+        name = _COMPANY_NAMES.get(sym_upper, sym_upper)
+        # Fetch real name in background — don't block the price response
+        async def _cache_name():
+            try:
+                real_name = await asyncio.wait_for(
+                    loop.run_in_executor(_YF_EXECUTOR, _yf_fetch_name_sync, sym_upper),
+                    timeout=6.0,
+                )
+                _PROFILE_CACHE[sym_upper] = (time.time(), {"name": real_name})
+            except Exception:
+                pass
+        asyncio.create_task(_cache_name())
+
+    try:
+        data = await asyncio.wait_for(
+            loop.run_in_executor(_YF_EXECUTOR, _yf_fetch_quote_sync, sym_upper),
+            timeout=5.0,
+        )
+        return {
+            "symbol":         sym_upper,
+            "name":           name,
+            "price":          str(round(data["price"],      4)),
+            "change":         str(round(data["change"],     4)),
+            "change_percent": str(round(data["change_pct"], 4)),
+            "volume":         str(data["volume"]) if data["volume"] else None,
+            "is_market_open": True,
+            "is_mock":        False,
+        }
+    except Exception:
+        return _mock_quote(symbol)
+
+
+def _apply_walk(sym: str, real_price: float) -> float:
+    """Apply one step of a random walk anchored to real_price.
+    Returns a price that moves visibly every second for demo purposes."""
+    base = _WALK_BASE.get(sym)
+    # Re-anchor walk if real price drifted > 0.5% from our base (market moved)
+    if base is None or abs(real_price - base) / base > 0.005:
+        _WALK_BASE[sym]   = real_price
+        _WALK_PRICES[sym] = real_price
+        base = real_price
+
+    current = _WALK_PRICES.get(sym, real_price)
+    # ±0.18% step per cycle — visible but realistic
+    step     = current * random.uniform(-0.0018, 0.0018)
+    new_price = current + step
+    # Hard-bound within ±3% of the real anchor
+    new_price = max(base * 0.97, min(base * 1.03, new_price))
+    new_price = round(new_price, 2)
+    _WALK_PRICES[sym] = new_price
+    return new_price
+
+
+@app.get("/api/prices/stream")
+async def price_stream(symbols: str = ""):
+    """SSE endpoint — pushes live price updates with a random walk overlay so
+    prices move visibly every second even when the market is closed."""
+    symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if not symbol_list:
+        raise HTTPException(status_code=400, detail="Provide at least one symbol")
+
+    async def generate():
+        loop = asyncio.get_event_loop()
+        # Fetch real prices once on connect so first event is instant
+        real_prices: dict[str, float] = {}
+        while True:
+            cycle_start = time.time()
+            try:
+                # Re-fetch real prices in background every ~10 cycles (~10 s)
+                # to stay anchored to actual market without hammering yfinance
+                if not real_prices or int(time.time()) % 10 == 0:
+                    raw = await asyncio.gather(
+                        *[loop.run_in_executor(_YF_EXECUTOR, _yf_fetch_quote_sync, sym)
+                          for sym in symbol_list],
+                        return_exceptions=True,
                     )
-                    profile = cached[1]
-                else:
-                    # Fetch quote + profile in parallel
-                    q_resp, p_resp = await asyncio.gather(
-                        client.get(f"{FINNHUB_BASE}/quote",
-                                   params={"symbol": symbol, "token": FINNHUB_API_KEY}),
-                        client.get(f"{FINNHUB_BASE}/stock/profile2",
-                                   params={"symbol": symbol, "token": FINNHUB_API_KEY}),
-                    )
-                    profile = p_resp.json()
-                    _PROFILE_CACHE[symbol.upper()] = (now, profile)
+                    for sym, result in zip(symbol_list, raw):
+                        if not isinstance(result, Exception):
+                            real_prices[sym] = result["price"]
+                        elif sym not in real_prices:
+                            real_prices[sym] = float(_mock_quote(sym)["price"])
 
-            q = q_resp.json()
+                payload: dict = {}
+                for sym in symbol_list:
+                    base   = real_prices.get(sym, float(_mock_quote(sym)["price"]))
+                    walked = _apply_walk(sym, base)
+                    prev   = _WALK_BASE.get(sym, base)
+                    change = round(walked - prev, 4)
+                    pct    = round(change / prev * 100, 4) if prev else 0.0
+                    payload[sym] = {
+                        "price":          walked,
+                        "change":         change,
+                        "change_percent": pct,
+                        "is_mock":        False,
+                    }
 
-            # Finnhub returns c=0 for unknown symbols
-            if not q.get("c"):
-                raise ValueError(f"No quote data for {symbol!r}")
+                yield f"data: {json.dumps(payload)}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
-            return {
-                "symbol":         symbol.upper(),
-                "name":           profile.get("name") or symbol.upper(),
-                "exchange":       profile.get("exchange", ""),
-                "logo":           profile.get("logo", ""),
-                "market_cap":     profile.get("marketCapitalization"),
-                "price":          str(round(float(q["c"]), 4)),
-                "change":         str(round(float(q.get("d")  or 0), 4)),
-                "change_percent": str(round(float(q.get("dp") or 0), 4)),
-                "high":           str(round(float(q.get("h")  or 0), 4)),
-                "low":            str(round(float(q.get("l")  or 0), 4)),
-                "open":           str(round(float(q.get("o")  or 0), 4)),
-                "prev_close":     str(round(float(q.get("pc") or 0), 4)),
-                # Finnhub /quote does not expose volume — omit so frontend hides the field
-                "volume":         None,
-                "is_market_open": True,
-                "is_mock":        False,
-            }
+            # Push every ~1 s
+            elapsed = time.time() - cycle_start
+            await asyncio.sleep(max(0.1, 1.0 - elapsed))
 
-        except Exception:
-            pass  # fall through to mock
-
-    return _mock_quote(symbol)
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":    "no-cache",
+            "Connection":       "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/candles/{symbol}")
@@ -425,99 +560,31 @@ async def get_candles(symbol: str, interval: str = "1day"):
     if interval not in ("5min", "1day"):
         raise HTTPException(status_code=400, detail="interval must be '5min' or '1day'")
 
-    # Serve from cache if fresh (avoids double Finnhub hit: chart + HoloMentor)
+    # Serve from cache if fresh (chart + HoloMentor share the same cache)
     cache_key = f"{symbol.upper()}:{interval}"
-    now_ts = time.time()
-    cached_candle = _CANDLE_CACHE.get(cache_key)
-    if cached_candle and (now_ts - cached_candle[0]) < CANDLE_CACHE_TTL:
-        return cached_candle[1]
+    now_ts    = time.time()
+    cached    = _CANDLE_CACHE.get(cache_key)
+    if cached and (now_ts - cached[0]) < CANDLE_CACHE_TTL:
+        return cached[1]
 
-    if FINNHUB_API_KEY:
-        try:
-            to_ts = int(time.time())
-
-            if interval == "5min":
-                from_ts    = to_ts - (2 * 24 * 60 * 60)   # last 2 days → plenty of 5-min bars
-                resolution = "5"
-            else:  # 1day
-                from_ts    = to_ts - (180 * 24 * 60 * 60)  # last 6 months of daily bars
-                resolution = "D"
-
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    f"{FINNHUB_BASE}/stock/candle",
-                    params={
-                        "symbol":     symbol,
-                        "resolution": resolution,
-                        "from":       from_ts,
-                        "to":         to_ts,
-                        "token":      FINNHUB_API_KEY,
-                    },
-                )
-            data = resp.json()
-
-            if data.get("s") != "ok":
-                raise ValueError(
-                    f"Finnhub returned s={data.get('s')!r} for {symbol} ({interval})"
-                )
-
-            timestamps = data["t"]
-            opens      = data["o"]
-            highs      = data["h"]
-            lows       = data["l"]
-            closes     = data["c"]
-            volumes    = data.get("v", [])
-
-            candles = []
-            for i, ts in enumerate(timestamps):
-                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-                time_str = (
-                    dt.strftime("%Y-%m-%d")
-                    if interval == "1day"
-                    else dt.strftime("%Y-%m-%d %H:%M:%S")
-                )
-                candles.append({
-                    "time":   time_str,
-                    "open":   round(float(opens[i]),  4),
-                    "high":   round(float(highs[i]),  4),
-                    "low":    round(float(lows[i]),   4),
-                    "close":  round(float(closes[i]), 4),
-                    "volume": int(volumes[i]) if i < len(volumes) else 0,
-                })
-
-            result = {"symbol": symbol, "interval": interval, "candles": candles, "is_mock": False}
-            _CANDLE_CACHE[cache_key] = (now_ts, result)
-            return result
-
-        except Exception:
-            pass  # fall through to mock
+    loop = asyncio.get_event_loop()
+    try:
+        candles = await asyncio.wait_for(
+            loop.run_in_executor(_YF_EXECUTOR, _yf_fetch_candles_sync, symbol.upper(), interval),
+            timeout=10.0,
+        )
+        if not candles:
+            raise ValueError("Empty candle response")
+        result = {"symbol": symbol, "interval": interval, "candles": candles, "is_mock": False}
+        _CANDLE_CACHE[cache_key] = (now_ts, result)
+        return result
+    except Exception:
+        pass
 
     candles = _mock_candles(symbol, interval)
-    result = {"symbol": symbol, "interval": interval, "candles": candles, "is_mock": True}
+    result  = {"symbol": symbol, "interval": interval, "candles": candles, "is_mock": True}
     _CANDLE_CACHE[cache_key] = (now_ts, result)
     return result
-
-
-# ── Alpha Vantage news helper (optional enrichment for Holo) ──────────────────
-
-async def get_news_sentiment(ticker: str) -> list:
-    if not AV_API_KEY:
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(
-                AV_BASE_URL,
-                params={
-                    "function": "NEWS_SENTIMENT",
-                    "tickers":  ticker,
-                    "limit":    5,
-                    "apikey":   AV_API_KEY,
-                },
-            )
-        data = resp.json()
-        return [item["title"] for item in data.get("feed", [])[:5] if "title" in item]
-    except Exception:
-        return []
 
 
 # ── OHLC summary helper (used by mentor endpoints, leverages candle cache) ─────
