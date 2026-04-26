@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HoloTrade: AI Stock Trading Simulator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              border: '#3f4552', // Muted slate border
+              input: '#3f4552',
+              ring: '#d97706', // Gold/Amber for focus rings
+              background: '#1a1d24', // Deep stormy blue/grey
+              foreground: '#e1e3e8', // Soft off-white
+              primary: {
+                DEFAULT: '#d97706', // Muted Gold/Amber
+                foreground: '#1a1d24', // Dark background for contrast on primary buttons
+              },
+              secondary: {
+                DEFAULT: '#242831', // Lighter stormy blue
+                foreground: '#e1e3e8',
+              },
+              destructive: {
+                DEFAULT: '#dc2626', // Muted Red
+                foreground: '#e1e3e8',
+              },
+              positive: {
+                DEFAULT: '#16a34a', // Muted Green
+                foreground: '#e1e3e8',
+              },
+              muted: {
+                DEFAULT: '#242831',
+                foreground: '#828997', // Muted grey for less important text
+              },
+              accent: {
+                DEFAULT: '#8b5cf6', // Soft violet
+                foreground: '#1a1d24',
+              },
+              card: {
+                DEFAULT: '#242831',
+                foreground: '#e1e3e8',
+              },
+            },
+            borderRadius: {
+              lg: `0.5rem`,
+              md: `calc(0.5rem - 2px)`,
+              sm: `calc(0.5rem - 4px)`,
+            },
+            fontFamily: {
+                sans: ['Inter', 'sans-serif'],
+            },
+            keyframes: {
+              "fade-in": {
+                  '0%': { opacity: '0' },
+                  '100%': { opacity: '1' },
+              },
+              "slide-in-up": {
+                  '0%': { transform: 'translateY(20px)', opacity: '0' },
+                  '100%': { transform: 'translateY(0)', opacity: '1' },
+              }
+            },
+            animation: {
+              "fade-in": "fade-in 0.5s ease-out forwards",
+              "slide-in-up": "slide-in-up 0.5s ease-out forwards",
+            },
+          },
+        },
+      }
+    </script>
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+      }
+      .prose-invert h3 {
+        color: #8b5cf6; /* accent color */
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.1.1/",
+    "react": "https://aistudiocdn.com/react@^19.1.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.1.1/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.21.0",
+    "react-router-dom": "https://aistudiocdn.com/react-router-dom@^7.9.3",
+    "recharts/": "https://aistudiocdn.com/recharts@^3.2.1/",
+    "recharts": "https://aistudiocdn.com/recharts@^3.2.1",
+    "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+    "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js": "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js",
+    "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-background text-foreground">
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
