@@ -5,7 +5,6 @@ import { UserCircleIcon } from '../icons/UserCircleIcon';
 import { HomeIcon } from '../icons/HomeIcon';
 import { ArrowTrendingUpIcon } from '../icons/ArrowTrendingUpIcon';
 import { AcademicCapIcon } from '../icons/AcademicCapIcon';
-import { ChatBubbleIcon } from '../icons/ChatBubbleIcon';
 import { NewspaperIcon } from '../icons/NewspaperIcon';
 
 const NavItem = ({ to, icon, label, isMobile = false }: { to: string; icon: React.ReactNode; label: string; isMobile?: boolean }) => {
@@ -57,7 +56,6 @@ export const Header: React.FC = () => {
                         <NavItem to="/trade" icon={<ArrowTrendingUpIcon className="w-5 h-5"/>} label="Trade" />
                         <NavItem to="/news" icon={<NewspaperIcon className="w-5 h-5"/>} label="News" />
                         <NavItem to="/learn" icon={<AcademicCapIcon className="w-5 h-5"/>} label="Learn" />
-                        <NavItem to="/assistant" icon={<ChatBubbleIcon className="w-5 h-5"/>} label="AI Assistant" />
                         <NavItem to="/demo" icon={<span className="text-base">▶</span>} label="Demo" />
                     </div>
 
@@ -68,12 +66,11 @@ export const Header: React.FC = () => {
                 </nav>
             </header>
             {/* Mobile Nav */}
-            <div className="sm:hidden fixed bottom-0 left-0 right-0 bg-background border-t border-border grid grid-cols-6 gap-1 p-1 z-50">
+            <div className="sm:hidden fixed bottom-0 left-0 right-0 bg-background border-t border-border grid grid-cols-5 gap-1 p-1 z-50">
                 <NavItem to="/" icon={<HomeIcon className="w-6 h-6"/>} label="Home" isMobile />
                 <NavItem to="/trade" icon={<ArrowTrendingUpIcon className="w-6 h-6"/>} label="Trade" isMobile />
                 <NavItem to="/news" icon={<NewspaperIcon className="w-6 h-6"/>} label="News" isMobile />
                 <NavItem to="/learn" icon={<AcademicCapIcon className="w-6 h-6"/>} label="Learn" isMobile />
-                <NavItem to="/assistant" icon={<ChatBubbleIcon className="w-6 h-6"/>} label="AI" isMobile />
                 <NavItem to="/demo" icon={<span className="text-xl">▶</span>} label="Demo" isMobile />
             </div>
         </>

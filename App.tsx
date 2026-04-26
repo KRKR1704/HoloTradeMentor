@@ -4,7 +4,7 @@ import { AppProvider, useAppContext } from "./context/AppContext";
 import { Header } from "./components/common/Header";
 import { DisclaimerBanner } from "./components/common/DisclaimerBanner";
 // import { TradeFeedbackModal } from "./components/common/TradeFeedbackModal";
-import { FloatingInsightButton } from "./components/common/FloatingInsightButton";
+// import { FloatingInsightButton } from "./components/common/FloatingInsightButton";
 // import { PortfolioInsightModal } from "HoloTradeMentor/components/common/PortfolioInsightModal.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import Dashboard from "./pages/Dashboard";
@@ -55,7 +55,7 @@ function AppContent() {
             onClose={handleCloseFeedback}
           />
         )} */}
-        <FloatingInsightButton onClick={handleOpenInsightModal} />
+        {/* <FloatingInsightButton onClick={handleOpenInsightModal} /> */}
         {/* {state.isInsightModalOpen && (
           <PortfolioInsightModal onClose={handleCloseInsightModal} />
         )} */}

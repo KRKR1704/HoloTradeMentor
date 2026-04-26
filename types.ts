@@ -54,13 +54,12 @@ export interface User {
 }
 
 export interface NewsArticle {
-  id: string;
-  title: string;
-  source: string;
+  headline: string;
   summary: string;
-  publishedAt: string;
-  url: string;
-  image?: string | null;
+  source: string;
+  relevance?: string;  // general market news
+  impact?: string;     // stock-specific news
+  sentiment: 'positive' | 'negative' | 'neutral';
 }
 
 export type MarketData = Record<string, number>; // Maps symbol to price

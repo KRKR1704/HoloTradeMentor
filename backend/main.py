@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import asyncio
@@ -23,19 +24,26 @@ AV_API_KEY        = os.getenv("AV_API_KEY")
 FINNHUB_BASE = "https://finnhub.io/api/v1"
 AV_BASE_URL  = "https://www.alphavantage.co/query"
 
-HOLO_SYSTEM_PROMPT = """You are Holo, a friendly and encouraging financial educator built into HoloTrade Mentor.
+HOLO_SYSTEM_PROMPT = """You are Holo, a personal stock market mentor inside HoloTrade Mentor. You are coaching a complete beginner who wants to genuinely understand investing — not just get answers.
 
-Your job is to help complete beginners understand stock charts and market concepts — not to give investment advice.
+YOUR ROLE IS TO TEACH, NOT TO CHAT.
 
-Guidelines:
-- Explain things in plain, jargon-free English. If you must use a term (like OHLC or volatility), define it immediately.
-- Be warm, encouraging, and patient. Never make the user feel silly for not knowing something.
-- Focus on education: explain WHAT you see in the data and WHY it matters conceptually.
-- NEVER recommend buying or selling any stock. If asked, gently redirect: "I can explain what this pattern means, but I'm not able to advise on whether to buy or sell."
-- Keep responses concise and scannable — use short paragraphs or bullet points when helpful.
-- Always end with a small encouragement or invite a follow-up question.
+How a good mentor responds:
+1. Lead with the concept, then ground it in the actual chart data in front of the user. Never explain in the abstract — always tie it to what they are currently looking at.
+2. Use the Socratic method. Ask the user a question at the end of every response to make them think. Examples: "What do you notice about the last 3 candles?", "Why do you think the price fell sharply here?", "What does a long lower wick tell you about buyers and sellers?"
+3. Use real-world analogies. Make finance human. A candlestick high = "the highest price anyone agreed to pay all day — like the peak bid at an auction." Support = "a price floor where buyers keep stepping in, like a sale price that keeps attracting shoppers."
+4. Structure every response as a mini-lesson: concept → what it looks like here → why it matters for investors → question or challenge for the user.
+5. Give the user micro-challenges: "Try switching to the 5-min view and tell me if the trend looks different", "Look at the candle from [date] — is it bullish or bearish, and why?"
+6. Reference prior context. If you've explained a concept earlier in this chat, build on it rather than repeating it. Treat the conversation as a progressive curriculum.
+7. Celebrate correct thinking: "Exactly right — that's called a breakout", "Good instinct — that's what a resistance level looks like."
 
-You are not a financial advisor. You are a teacher."""
+What you NEVER do:
+- Give buy or sell recommendations. If asked, redirect: "That's your call to make — I can explain the concept behind it, but I won't tell you what to do with your money."
+- Give flat dictionary definitions without context. Always explain WHY the concept matters to a real investor.
+- Write a wall of text. Use short paragraphs, bullet points, or numbered steps to keep lessons scannable.
+- Be vague. Be specific about what you see in the chart data provided.
+
+You are not a chatbot. You are a mentor. Every response should leave the user knowing something they didn't before AND thinking about something new."""
 
 app = FastAPI(title="HoloTrade Mentor API")
 
@@ -53,7 +61,7 @@ app.add_middleware(
 class ExplainRequest(BaseModel):
     symbol: str
     interval: str
-    ohlc_summary: str
+    ohlc_summary: Optional[str] = None   # optional: backend fetches from cache if absent
     question: Optional[str] = None
 
 
@@ -70,6 +78,15 @@ class ChatRequest(BaseModel):
 class AskRequest(BaseModel):
     prompt: str
     context: Optional[str] = None
+
+
+class NewsRequest(BaseModel):
+    category: str = "general"
+
+
+class StockNewsRequest(BaseModel):
+    symbol: str
+    name: str = ""
 
 
 # ── Mock data fallback ────────────────────────────────────────────────────────
@@ -146,33 +163,35 @@ def _mock_quote(symbol: str) -> dict:
 _PROFILE_CACHE: dict[str, tuple[float, dict]] = {}
 PROFILE_CACHE_TTL = 3600  # seconds
 
-# News: general market and per-symbol — cache for 15 minutes
+# Candle data — cache for 60 s so rapid page loads and HoloMentor's own candle
+# fetch don't both hit Finnhub; keeps the chart feeling snappy.
+_CANDLE_CACHE: dict[str, tuple[float, dict]] = {}
+CANDLE_CACHE_TTL = 60  # seconds
+
+# News cache — Claude web-search results per category/symbol, TTL 20 min
 _NEWS_CACHE: dict[str, tuple[float, list]] = {}
-NEWS_CACHE_TTL  = 15 * 60  # seconds
-NEWS_MAX_AGE    = 7 * 24 * 60 * 60  # 7 days in seconds
+NEWS_CACHE_TTL = 20 * 60  # seconds
+
+NEWS_SYSTEM_PROMPT = (
+    "You are a financial news summarizer for beginner investors. "
+    "Always use web search to find real, current news — never fabricate stories. "
+    "Be factual, neutral, and educational. Never give buy/sell recommendations. "
+    "Always cite the real source publication name."
+)
 
 
-def _map_finnhub_article(item: dict) -> dict:
-    """Normalise a single Finnhub news item to our API shape."""
-    ts = item.get("datetime", 0)
-    try:
-        published_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-    except Exception:
-        published_at = datetime.now(tz=timezone.utc).isoformat()
-
-    image = item.get("image") or None
-    if image == "":
-        image = None
-
-    return {
-        "id":           str(item.get("id", "")),
-        "title":        item.get("headline", ""),
-        "source":       item.get("source", ""),
-        "summary":      item.get("summary", ""),
-        "url":          item.get("url") or "#",
-        "image":        image,
-        "publishedAt":  published_at,
-    }
+def _parse_news_json(raw: str) -> list:
+    """Extract and parse a JSON array from Claude's response text."""
+    raw = raw.strip()
+    # Strip accidental markdown fences
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+    if fence_match:
+        raw = fence_match.group(1).strip()
+    # Find the outermost JSON array
+    arr_match = re.search(r"\[[\s\S]*\]", raw)
+    if arr_match:
+        return json.loads(arr_match.group(0))
+    return json.loads(raw)  # last-resort full parse
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -182,90 +201,106 @@ def health():
     return {"status": "ok"}
 
 
-# ── News ─────────────────────────────────────────────────────────────────────
+# ── News (Claude web-search powered) ─────────────────────────────────────────
 
-@app.get("/api/news")
-async def get_market_news():
-    """General market news — last 7 days, cached 15 min."""
-    cache_key = "__general__"
+@app.post("/api/news")
+async def get_market_news(body: NewsRequest):
+    """General market news — Claude searches the web, cached 20 min."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
+
+    cache_key = f"general:{body.category}"
     now = time.time()
     cached = _NEWS_CACHE.get(cache_key)
     if cached and (now - cached[0]) < NEWS_CACHE_TTL:
         return cached[1]
 
-    if FINNHUB_API_KEY:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    f"{FINNHUB_BASE}/news",
-                    params={"category": "general", "token": FINNHUB_API_KEY},
-                )
-            items = resp.json()
-            if not isinstance(items, list):
-                raise ValueError(f"Unexpected response: {items}")
+    user_message = (
+        "Search the web for the latest stock market and financial news from the last "
+        "24 hours. Summarize the top 6 most important stories. For each story return:\n"
+        "- headline (concise, max 12 words)\n"
+        "- summary (2-3 sentences, plain English, beginner friendly)\n"
+        "- source (publication name)\n"
+        "- relevance (one sentence on why this matters to investors)\n"
+        "- sentiment: 'positive' | 'negative' | 'neutral'\n\n"
+        "Respond ONLY in valid JSON array format, no markdown, no preamble:\n"
+        '[{"headline":"","summary":"","source":"","relevance":"","sentiment":""}]'
+    )
 
-            cutoff   = now - NEWS_MAX_AGE
-            articles = []
-            for item in items:
-                if item.get("datetime", 0) < cutoff:
-                    continue
-                articles.append(_map_finnhub_article(item))
-                if len(articles) >= 20:
-                    break
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            system=NEWS_SYSTEM_PROMPT,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            messages=[{"role": "user", "content": user_message}],
+        )
 
-            _NEWS_CACHE[cache_key] = (now, articles)
-            return articles
+        raw = "".join(
+            block.text for block in response.content if hasattr(block, "text")
+        )
+        articles = _parse_news_json(raw)
+        _NEWS_CACHE[cache_key] = (now, articles)
+        return articles
 
-        except Exception:
-            pass  # fall through to empty list
-
-    return []
+    except Exception as e:
+        return {"error": f"Could not fetch news: {str(e)}", "articles": []}
 
 
-@app.get("/api/news/{symbol}")
-async def get_stock_news(symbol: str):
-    """Company-specific news — last 7 days, cached 15 min per symbol."""
-    cache_key = f"stock:{symbol.upper()}"
+@app.post("/api/news/stock")
+async def get_stock_news(body: StockNewsRequest):
+    """Stock-specific news — Claude searches the web, cached 20 min per symbol."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
+
+    cache_key = f"stock:{body.symbol.upper()}"
     now = time.time()
     cached = _NEWS_CACHE.get(cache_key)
     if cached and (now - cached[0]) < NEWS_CACHE_TTL:
         return cached[1]
 
-    if FINNHUB_API_KEY:
-        try:
-            to_date   = datetime.now().strftime("%Y-%m-%d")
-            from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    display = f"{body.name} ({body.symbol})" if body.name else body.symbol
+    user_message = (
+        f"Search the web for the latest news about {display} stock from the last "
+        "7 days. Summarize the top 5 most relevant stories for a beginner investor. "
+        "For each story return:\n"
+        "- headline (concise, max 12 words)\n"
+        "- summary (2-3 sentences, plain English)\n"
+        "- source (publication name)\n"
+        "- impact (how this news might affect the stock — educational framing only, "
+        "no buy/sell advice)\n"
+        "- sentiment: 'positive' | 'negative' | 'neutral'\n\n"
+        "Respond ONLY in valid JSON array format, no markdown, no preamble:\n"
+        '[{"headline":"","summary":"","source":"","impact":"","sentiment":""}]'
+    )
 
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    f"{FINNHUB_BASE}/company-news",
-                    params={
-                        "symbol": symbol,
-                        "from":   from_date,
-                        "to":     to_date,
-                        "token":  FINNHUB_API_KEY,
-                    },
-                )
-            items = resp.json()
-            if not isinstance(items, list):
-                raise ValueError(f"Unexpected response: {items}")
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            system=NEWS_SYSTEM_PROMPT,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            messages=[{"role": "user", "content": user_message}],
+        )
 
-            cutoff   = now - NEWS_MAX_AGE
-            articles = []
-            for item in items:
-                if item.get("datetime", 0) < cutoff:
-                    continue
-                articles.append(_map_finnhub_article(item))
-                if len(articles) >= 15:
-                    break
+        raw = "".join(
+            block.text for block in response.content if hasattr(block, "text")
+        )
+        articles = _parse_news_json(raw)
+        _NEWS_CACHE[cache_key] = (now, articles)
+        return articles
 
-            _NEWS_CACHE[cache_key] = (now, articles)
-            return articles
+    except Exception as e:
+        return {"error": f"Could not fetch news: {str(e)}", "articles": []}
 
-        except Exception:
-            pass
 
-    return []
+@app.delete("/api/news/cache")
+async def clear_news_cache():
+    """Bust the entire news cache so the next fetch is always fresh."""
+    _NEWS_CACHE.clear()
+    return {"cleared": True, "message": "News cache cleared"}
 
 
 # ── Symbol Search ─────────────────────────────────────────────────────────────
@@ -390,6 +425,13 @@ async def get_candles(symbol: str, interval: str = "1day"):
     if interval not in ("5min", "1day"):
         raise HTTPException(status_code=400, detail="interval must be '5min' or '1day'")
 
+    # Serve from cache if fresh (avoids double Finnhub hit: chart + HoloMentor)
+    cache_key = f"{symbol.upper()}:{interval}"
+    now_ts = time.time()
+    cached_candle = _CANDLE_CACHE.get(cache_key)
+    if cached_candle and (now_ts - cached_candle[0]) < CANDLE_CACHE_TTL:
+        return cached_candle[1]
+
     if FINNHUB_API_KEY:
         try:
             to_ts = int(time.time())
@@ -443,13 +485,17 @@ async def get_candles(symbol: str, interval: str = "1day"):
                     "volume": int(volumes[i]) if i < len(volumes) else 0,
                 })
 
-            return {"symbol": symbol, "interval": interval, "candles": candles, "is_mock": False}
+            result = {"symbol": symbol, "interval": interval, "candles": candles, "is_mock": False}
+            _CANDLE_CACHE[cache_key] = (now_ts, result)
+            return result
 
         except Exception:
             pass  # fall through to mock
 
     candles = _mock_candles(symbol, interval)
-    return {"symbol": symbol, "interval": interval, "candles": candles, "is_mock": True}
+    result = {"symbol": symbol, "interval": interval, "candles": candles, "is_mock": True}
+    _CANDLE_CACHE[cache_key] = (now_ts, result)
+    return result
 
 
 # ── Alpha Vantage news helper (optional enrichment for Holo) ──────────────────
@@ -474,6 +520,39 @@ async def get_news_sentiment(ticker: str) -> list:
         return []
 
 
+# ── OHLC summary helper (used by mentor endpoints, leverages candle cache) ─────
+
+async def _build_ohlc_summary(symbol: str, interval: str, provided: Optional[str]) -> str:
+    """Return OHLC summary text. Uses caller-supplied text if present, otherwise
+    fetches from /api/candles (hits the 60-second cache when warm)."""
+    if provided:
+        return provided
+    try:
+        cache_key = f"{symbol.upper()}:{interval}"
+        cached = _CANDLE_CACHE.get(cache_key)
+        if cached and (time.time() - cached[0]) < CANDLE_CACHE_TTL:
+            candles = cached[1].get("candles", [])
+        else:
+            # Fetch fresh (will also populate the cache via get_candles)
+            async with httpx.AsyncClient(timeout=8.0) as hc:
+                r = await hc.get(
+                    f"http://localhost:8000/api/candles/{symbol}",
+                    params={"interval": interval},
+                )
+            candles = r.json().get("candles", []) if r.status_code == 200 else []
+        last5 = candles[-5:]
+        if not last5:
+            return f"Symbol: {symbol}, Interval: {interval} (no recent data)"
+        rows = "\n".join(
+            f"{c['time']}  O:${float(c['open']):.2f} H:${float(c['high']):.2f} "
+            f"L:${float(c['low']):.2f} C:${float(c['close']):.2f}"
+            for c in last5
+        )
+        return f"Last 5 candles for {symbol} ({interval}):\n{rows}"
+    except Exception:
+        return f"Symbol: {symbol}, Interval: {interval}"
+
+
 # ── AI Mentor ─────────────────────────────────────────────────────────────────
 
 @app.post("/api/mentor/explain")
@@ -481,33 +560,37 @@ async def mentor_explain(body: ExplainRequest):
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
 
+    # Build OHLC context (uses cache — fast if chart already loaded)
+    ohlc_summary = await _build_ohlc_summary(body.symbol, body.interval, body.ohlc_summary)
+
     user_content = (
         f"I'm looking at the {body.interval} chart for {body.symbol}.\n\n"
-        f"Here's a summary of the recent price data:\n{body.ohlc_summary}\n\n"
+        f"Here's a summary of the recent price data:\n{ohlc_summary}\n\n"
     )
     if body.question:
         user_content += f"My question: {body.question}"
     else:
-        user_content += "Can you explain what this chart is showing me?"
-
-    headlines = await get_news_sentiment(body.symbol)
-    if headlines:
         user_content += (
-            f"\n\nRecent news context for {body.symbol}:\n"
-            + "\n".join(f"- {h}" for h in headlines)
+            "Give me a focused lesson on what this chart is showing. "
+            "Pick the single most educational thing visible in this data, "
+            "explain the concept clearly with an analogy, show me where I can see it "
+            "in these specific candles, and end by asking me a question to check my understanding."
         )
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     def stream_response():
-        with client.messages.stream(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1024,
-            system=HOLO_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_content}],
-        ) as stream:
-            for text in stream.text_stream:
-                yield text
+        try:
+            with client.messages.stream(
+                model="claude-sonnet-4-20250514",
+                max_tokens=700,
+                system=HOLO_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_content}],
+            ) as stream:
+                for text in stream.text_stream:
+                    yield text
+        except Exception as e:
+            yield f"\n\n⚠ Holo encountered an error: {e}"
 
     return StreamingResponse(stream_response(), media_type="text/plain")
 
@@ -522,13 +605,20 @@ async def mentor_chat(body: ChatRequest):
 
     system = HOLO_SYSTEM_PROMPT
     if body.context:
+        # Enrich system prompt with live context
         ctx_parts = []
         if body.context.get("symbol"):
             ctx_parts.append(f"Current stock: {body.context['symbol']}")
         if body.context.get("interval"):
             ctx_parts.append(f"Chart interval: {body.context['interval']}")
-        if body.context.get("ohlc_summary"):
-            ctx_parts.append(f"Recent chart data:\n{body.context['ohlc_summary']}")
+        # If frontend didn't send ohlc_summary, fetch from cache
+        ohlc = await _build_ohlc_summary(
+            body.context.get("symbol", ""),
+            body.context.get("interval", "1day"),
+            body.context.get("ohlc_summary"),
+        )
+        if ohlc:
+            ctx_parts.append(f"Recent chart data:\n{ohlc}")
         if ctx_parts:
             system += "\n\nCurrent session context:\n" + "\n".join(ctx_parts)
 
@@ -536,24 +626,32 @@ async def mentor_chat(body: ChatRequest):
     client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     def stream_response():
-        with client.messages.stream(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1024,
-            system=system,
-            messages=messages,
-        ) as stream:
-            for text in stream.text_stream:
-                yield text
+        try:
+            with client.messages.stream(
+                model="claude-sonnet-4-20250514",
+                max_tokens=700,
+                system=system,
+                messages=messages,
+            ) as stream:
+                for text in stream.text_stream:
+                    yield text
+        except Exception as e:
+            yield f"\n\n⚠ Holo encountered an error: {e}"
 
     return StreamingResponse(stream_response(), media_type="text/plain")
 
 
 # ── General AI (portfolio features) ──────────────────────────────────────────
 
-HOLOTRADE_SYSTEM_PROMPT = """You are HoloTrade, a friendly AI financial assistant built into a stock trading simulator.
-Your role is to educate beginner investors clearly and encouragingly.
-Never give direct financial advice or predict stock prices.
-Focus on explaining concepts and analyzing past data.
+HOLOTRADE_SYSTEM_PROMPT = """You are Holo, a personal investing mentor inside HoloTrade Mentor.
+A student just made a trade. Your job is to turn it into a teaching moment — not to praise or criticise the trade itself, but to make the student understand the concept behind it.
+
+Mentor rules:
+- Identify ONE investing concept this trade illustrates (e.g. position sizing, concentration risk, realising a loss, cost averaging) and explain it clearly.
+- Use the actual numbers from their trade to make the lesson concrete and personal.
+- End with a single question that makes them reflect on their decision ("What % of your portfolio did this trade represent? Is that comfortable for you?").
+- Keep it to 3-4 sentences max. Punchy, not preachy.
+- Never recommend they reverse the trade or imply it was a mistake. Teach the concept; let them draw their own conclusions.
 This is for educational purposes only — not financial advice."""
 
 
@@ -566,14 +664,22 @@ async def ai_ask(body: AskRequest):
     if body.context:
         user_content = f"Context: {body.context}\n\n{body.prompt}"
 
-    client  = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1024,
-        system=HOLOTRADE_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_content}],
-    )
-    return {"response": message.content[0].text}
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+    def stream_response():
+        try:
+            with client.messages.stream(
+                model="claude-sonnet-4-20250514",
+                max_tokens=400,
+                system=HOLOTRADE_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_content}],
+            ) as stream:
+                for text in stream.text_stream:
+                    yield text
+        except Exception as e:
+            yield f"Unable to generate feedback: {e}"
+
+    return StreamingResponse(stream_response(), media_type="text/plain")
 
 
 @app.post("/api/ai/news")

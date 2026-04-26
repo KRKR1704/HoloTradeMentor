@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 
 const BACKEND = 'http://localhost:8000';
-const POLL_INTERVAL_MS = 30_000;
 
 export interface QuoteData {
   price: number;
@@ -19,7 +18,7 @@ interface UseStockQuoteResult {
   updatedAt: Date | null;
 }
 
-export function useStockQuote(symbol: string): UseStockQuoteResult {
+export function useStockQuote(symbol: string, pollIntervalMs = 30_000): UseStockQuoteResult {
   const [quote, setQuote] = useState<QuoteData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,13 +62,13 @@ export function useStockQuote(symbol: string): UseStockQuoteResult {
     setUpdatedAt(null);
 
     fetchQuote();
-    const id = setInterval(fetchQuote, POLL_INTERVAL_MS);
+    const id = setInterval(fetchQuote, pollIntervalMs);
 
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [symbol]);
+  }, [symbol, pollIntervalMs]);
 
   return { quote, loading, error, updatedAt };
 }

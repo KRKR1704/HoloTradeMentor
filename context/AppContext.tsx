@@ -157,78 +157,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({
 }) => {
   const [state, dispatch] = useReducer(appReducer, initialState);
 
-  // Fetch initial market data and update periodically
+  // Fetch prices for portfolio holdings in parallel, refresh every 30s
   useEffect(() => {
     const fetchMarketData = async () => {
-      const symbols = [
-        "AAPL",
-        "GOOGL",
-        "MSFT",
-        "AMZN",
-        "TSLA",
-        "NVDA",
-        "META",
-        "IBM",
-        "ORCL",
-        "ADBE",
-        "CRM",
-        "INTC",
-        "QCOM",
-        "CSCO",
-        "SAP",
-        "JPM",
-        "V",
-        "BAC",
-        "WFC",
-        "GS",
-        "C",
-        "BRK-B",
-        "AXP",
-        "SCHW",
-        "JNJ",
-        "PFE",
-        "UNH",
-        "LLY",
-        "MRK",
-        "ABBV",
-        "TMO",
-        "NKE",
-        "MCD",
-        "SBUX",
-        "HD",
-        "LOW",
-        "F",
-        "GM",
-        "WMT",
-        "PG",
-        "KO",
-        "PEP",
-        "COST",
-        "TGT",
-        "BA",
-        "CAT",
-        "HON",
-        "UPS",
-        "LMT",
-        "XOM",
-        "CVX",
-        "DIS",
-        "VZ",
-        "T",
-        "NFLX",
-      ];
-      const newMarketData: MarketData = {};
+      const portfolio = state.currentUser?.portfolio ?? [];
+      if (portfolio.length === 0) return;
 
-      for (const symbol of symbols) {
-        try {
-          const quote = await getStockQuote(symbol);
-          if (quote) {
-            newMarketData[symbol] = quote.price;
-          }
-        } catch {
-          // Skip failed quotes
+      // Deduplicate symbols and fetch all in parallel
+      const symbols = [...new Set(portfolio.map((item) => item.stock.symbol))];
+
+      const results = await Promise.allSettled(
+        symbols.map((symbol) => getStockQuote(symbol))
+      );
+
+      const newMarketData: MarketData = {};
+      results.forEach((result, i) => {
+        if (result.status === "fulfilled" && result.value) {
+          newMarketData[symbols[i]] = result.value.price;
         }
-      }
+      });
 
       if (Object.keys(newMarketData).length > 0) {
         dispatch({ type: "UPDATE_MARKET_DATA", payload: newMarketData });
@@ -237,11 +184,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({
 
     fetchMarketData();
 
-    // Update prices every 30 seconds
-    const marketInterval = setInterval(fetchMarketData, 30000);
+    // Update prices every 4 seconds
+    const marketInterval = setInterval(fetchMarketData, 4000);
 
     return () => clearInterval(marketInterval);
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.currentUser?.portfolio]);
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>

@@ -5,23 +5,40 @@ import { Stock, PortfolioItem, TradeType, Trade, User, StockHistoryPoint, NewsAr
 
 const BACKEND = 'http://localhost:8000';
 
-async function callBackend(prompt: string, context?: string): Promise<string> {
+// Stream text/plain from backend, calling onChunk for each chunk.
+// Resolves with the full accumulated text when the stream closes.
+export async function streamAI(
+  prompt: string,
+  onChunk: (chunk: string, full: string) => void,
+  context?: string,
+): Promise<string> {
   try {
     const res = await fetch(`${BACKEND}/api/ai/ask`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt, context }),
     });
-    if (!res.ok) return 'The AI assistant is temporarily unavailable. Please try again.';
-    const data = await res.json();
-    return data.response ?? '';
+    if (!res.ok || !res.body) return 'The AI assistant is temporarily unavailable. Please try again.';
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let full = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      full += chunk;
+      onChunk(chunk, full);
+    }
+    return full;
   } catch {
     return 'Unable to reach the AI backend. Make sure it is running on port 8000.';
   }
 }
 
+// Legacy non-streaming helper kept for backward compat (reads full stream then returns)
 export const askAI = async (query: string, context?: string): Promise<string> => {
-  return callBackend(query, context);
+  return streamAI(query, () => {}, context);
 };
 
 // ── Prompt builders (pure functions — no API calls) ───────────────────────────

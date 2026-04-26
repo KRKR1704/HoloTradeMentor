@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Trade, User } from '../../types';
-import { askAI, getTradeFeedbackPrompt } from '../../services/aiService';
+import { streamAI, getTradeFeedbackPrompt } from '../../services/aiService';
 
 interface Props {
   feedbackContext: { trade: Trade; userBeforeTrade: User };
@@ -14,8 +14,16 @@ export const TradeFeedbackModal: React.FC<Props> = ({ feedbackContext, onClose }
 
   useEffect(() => {
     const prompt = getTradeFeedbackPrompt(trade, userBeforeTrade);
-    askAI(prompt).then((res) => {
-      setHoloResponse(res);
+    setHoloResponse('');
+    setLoading(true);
+
+    streamAI(
+      prompt,
+      (_chunk, full) => {
+        setHoloResponse(full);
+        setLoading(false); // show text as soon as first chunk arrives
+      },
+    ).then(() => {
       setLoading(false);
     });
   }, [trade, userBeforeTrade]);
@@ -75,7 +83,13 @@ export const TradeFeedbackModal: React.FC<Props> = ({ feedbackContext, onClose }
               <div className="h-3 bg-slate-700 rounded w-4/6" />
             </div>
           ) : (
-            <p className="text-sm text-slate-300 leading-relaxed">{holoResponse}</p>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              {holoResponse}
+              {/* blinking cursor while streaming */}
+              {holoResponse && holoResponse.length < 350 && (
+                <span className="inline-block w-1.5 h-3.5 bg-teal-400 ml-0.5 align-middle animate-pulse rounded-sm" />
+              )}
+            </p>
           )}
         </div>
 
