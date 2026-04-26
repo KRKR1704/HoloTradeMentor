@@ -91,7 +91,7 @@ Persistent banner and AI-level prompt constraints enforce educational-only outpu
 
 - Node.js 18+
 - Python 3.10+
-- API keys for: [Anthropic](https://console.anthropic.com), [Twelve Data](https://twelvedata.com), [Alpha Vantage](https://www.alphavantage.co)
+- API keys for: [Anthropic](https://console.anthropic.com), [Finnhub](https://finnhub.io), [Alpha Vantage](https://www.alphavantage.co) (optional)
 
 ### 1. Clone the repo
 
@@ -113,8 +113,8 @@ Create a `.env` file in `/backend`:
 
 ```env
 ANTHROPIC_API_KEY=your_anthropic_key
-TWELVE_DATA_API_KEY=your_twelve_data_key
-ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key
+FINNHUB_API_KEY=your_finnhub_key
+AV_API_KEY=your_alpha_vantage_key   # optional
 ```
 
 Start the FastAPI server:

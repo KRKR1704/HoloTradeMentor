@@ -60,6 +60,7 @@ export interface NewsArticle {
   summary: string;
   publishedAt: string;
   url: string;
+  image?: string | null;
 }
 
 export type MarketData = Record<string, number>; // Maps symbol to price

@@ -7,7 +7,7 @@ export interface QuoteData {
   price: number;
   change: number;
   changePercent: number;
-  volume: number;
+  volume?: number;   // not available from Finnhub quote endpoint; present from mock data
   isMock: boolean;
   name?: string;
 }
@@ -43,7 +43,7 @@ export function useStockQuote(symbol: string): UseStockQuoteResult {
             price: parseFloat(data.price),
             change: parseFloat(data.change),
             changePercent: parseFloat(data.change_percent),
-            volume: parseInt(data.volume, 10),
+            volume: data.volume != null ? parseInt(data.volume, 10) : undefined,
             isMock: data.is_mock === true,
             name: data.name ?? undefined,
           });

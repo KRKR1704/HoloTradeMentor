@@ -1,8 +1,15 @@
 import { NewsArticle } from '../types';
-import { generateRealTimeNews } from './aiService';
+
+const BACKEND = 'http://localhost:8000';
 
 export const getMarketNews = async (): Promise<NewsArticle[]> => {
-  // This function now directly calls the Anthropic AI service to get real-time news.
-  // Error handling is managed by the component calling this function.
-  return await generateRealTimeNews();
+  const res = await fetch(`${BACKEND}/api/news`);
+  if (!res.ok) throw new Error(`News fetch failed: HTTP ${res.status}`);
+  return res.json() as Promise<NewsArticle[]>;
+};
+
+export const getStockNews = async (symbol: string): Promise<NewsArticle[]> => {
+  const res = await fetch(`${BACKEND}/api/news/${encodeURIComponent(symbol)}`);
+  if (!res.ok) throw new Error(`Stock news fetch failed: HTTP ${res.status}`);
+  return res.json() as Promise<NewsArticle[]>;
 };

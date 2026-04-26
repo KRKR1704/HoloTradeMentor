@@ -1,6 +1,7 @@
 import os
 import json
-import math
+import time
+import asyncio
 import random
 import hashlib
 import httpx
@@ -10,17 +11,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from typing import Optional, List
-from datetime import datetime, timedelta
+from typing import Optional
+from datetime import datetime, timezone, timedelta
 
 load_dotenv()
 
-TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
+FINNHUB_API_KEY  = os.getenv("FINNHUB_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-AV_API_KEY = os.getenv("AV_API_KEY")
+AV_API_KEY        = os.getenv("AV_API_KEY")
 
-TWELVE_DATA_BASE = "https://api.twelvedata.com"
-AV_BASE_URL = "https://www.alphavantage.co/query"
+FINNHUB_BASE = "https://finnhub.io/api/v1"
+AV_BASE_URL  = "https://www.alphavantage.co/query"
 
 HOLO_SYSTEM_PROMPT = """You are Holo, a friendly and encouraging financial educator built into HoloTrade Mentor.
 
@@ -40,14 +41,14 @@ app = FastAPI(title="HoloTrade Mentor API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# ── Models ────────────────────────────────────────────────────────────────────
+# ── Pydantic models ───────────────────────────────────────────────────────────
 
 class ExplainRequest(BaseModel):
     symbol: str
@@ -57,7 +58,7 @@ class ExplainRequest(BaseModel):
 
 
 class ChatMessage(BaseModel):
-    role: str  # "user" or "assistant"
+    role: str   # "user" or "assistant"
     content: str
 
 
@@ -71,8 +72,8 @@ class AskRequest(BaseModel):
     context: Optional[str] = None
 
 
-# ── Mock data fallback ───────────────────────────────────────────────────────
-# Used when Twelve Data API key is absent or returns an error.
+# ── Mock data fallback ────────────────────────────────────────────────────────
+# Used when Finnhub API key is absent or returns an error.
 
 _BASE_PRICES = {
     "AAPL": 185.0, "MSFT": 415.0, "NVDA": 875.0, "TSLA": 250.0,
@@ -81,60 +82,96 @@ _BASE_PRICES = {
 }
 
 _COMPANY_NAMES = {
-    "AAPL": "Apple Inc.", "MSFT": "Microsoft Corp.", "NVDA": "NVIDIA Corp.",
-    "TSLA": "Tesla Inc.", "ORCL": "Oracle Corp.",     "META": "Meta Platforms",
-    "GOOGL": "Alphabet Inc.", "AMZN": "Amazon.com Inc.", "NFLX": "Netflix Inc.",
-    "AMD": "Advanced Micro Devices", "INTC": "Intel Corp.", "CRM": "Salesforce Inc.",
+    "AAPL": "Apple Inc.",            "MSFT": "Microsoft Corp.",
+    "NVDA": "NVIDIA Corp.",          "TSLA": "Tesla Inc.",
+    "ORCL": "Oracle Corp.",          "META": "Meta Platforms",
+    "GOOGL": "Alphabet Inc.",        "AMZN": "Amazon.com Inc.",
+    "NFLX": "Netflix Inc.",          "AMD":  "Advanced Micro Devices",
+    "INTC": "Intel Corp.",           "CRM":  "Salesforce Inc.",
 }
 
+
 def _seed_for(symbol: str) -> int:
-    """Stable seed derived from the symbol so mock data is consistent per symbol."""
     return int(hashlib.md5(symbol.upper().encode()).hexdigest(), 16) % (2 ** 32)
 
 
 def _mock_candles(symbol: str, interval: str) -> list:
     count = 78 if interval == "5min" else 90
-    rng = random.Random(_seed_for(symbol))
-    base = _BASE_PRICES.get(symbol.upper(), 100.0)
+    rng   = random.Random(_seed_for(symbol))
+    base  = _BASE_PRICES.get(symbol.upper(), 100.0)
     price = base * rng.uniform(0.85, 1.15)
-    now = datetime.utcnow()
+    now   = datetime.utcnow()
     candles = []
     for i in range(count - 1, -1, -1):
         if interval == "1day":
-            dt = now - timedelta(days=i)
+            dt       = now - timedelta(days=i)
             time_str = dt.strftime("%Y-%m-%d")
         else:
-            dt = now - timedelta(minutes=i * 5)
+            dt       = now - timedelta(minutes=i * 5)
             time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Gaussian random walk — slight upward drift
-        pct = rng.gauss(0.0005, 0.014)
-        open_p = price
+        pct     = rng.gauss(0.0005, 0.014)
+        open_p  = price
         close_p = round(price * (1 + pct), 2)
         high_p  = round(max(open_p, close_p) * (1 + abs(rng.gauss(0, 0.004))), 2)
         low_p   = round(min(open_p, close_p) * (1 - abs(rng.gauss(0, 0.004))), 2)
         volume  = int(rng.uniform(8e6, 6e7))
         candles.append({"time": time_str, "open": open_p, "high": high_p,
-                         "low": low_p, "close": close_p, "volume": volume})
+                        "low": low_p, "close": close_p, "volume": volume})
         price = close_p
     return candles
 
 
 def _mock_quote(symbol: str) -> dict:
     candles = _mock_candles(symbol, "1day")
-    last = candles[-1]
-    prev = candles[-2] if len(candles) > 1 else last
-    change = round(last["close"] - prev["close"], 2)
-    pct    = round(change / prev["close"] * 100, 2) if prev["close"] else 0.0
+    last    = candles[-1]
+    prev    = candles[-2] if len(candles) > 1 else last
+    change  = round(last["close"] - prev["close"], 2)
+    pct     = round(change / prev["close"] * 100, 2) if prev["close"] else 0.0
     return {
-        "symbol": symbol.upper(),
-        "name": _COMPANY_NAMES.get(symbol.upper(), symbol.upper()),
-        "price": str(last["close"]),
-        "change": str(change),
+        "symbol":         symbol.upper(),
+        "name":           _COMPANY_NAMES.get(symbol.upper(), symbol.upper()),
+        "price":          str(last["close"]),
+        "change":         str(change),
         "change_percent": str(pct),
-        "volume": str(last["volume"]),
+        "volume":         str(last["volume"]),
         "is_market_open": True,
-        "is_mock": True,
+        "is_mock":        True,
+    }
+
+
+# ── Caches ───────────────────────────────────────────────────────────────────
+# profile2 data changes at most once a day — cache for 1 hour to save API calls.
+
+_PROFILE_CACHE: dict[str, tuple[float, dict]] = {}
+PROFILE_CACHE_TTL = 3600  # seconds
+
+# News: general market and per-symbol — cache for 15 minutes
+_NEWS_CACHE: dict[str, tuple[float, list]] = {}
+NEWS_CACHE_TTL  = 15 * 60  # seconds
+NEWS_MAX_AGE    = 7 * 24 * 60 * 60  # 7 days in seconds
+
+
+def _map_finnhub_article(item: dict) -> dict:
+    """Normalise a single Finnhub news item to our API shape."""
+    ts = item.get("datetime", 0)
+    try:
+        published_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    except Exception:
+        published_at = datetime.now(tz=timezone.utc).isoformat()
+
+    image = item.get("image") or None
+    if image == "":
+        image = None
+
+    return {
+        "id":           str(item.get("id", "")),
+        "title":        item.get("headline", ""),
+        "source":       item.get("source", ""),
+        "summary":      item.get("summary", ""),
+        "url":          item.get("url") or "#",
+        "image":        image,
+        "publishedAt":  published_at,
     }
 
 
@@ -145,6 +182,92 @@ def health():
     return {"status": "ok"}
 
 
+# ── News ─────────────────────────────────────────────────────────────────────
+
+@app.get("/api/news")
+async def get_market_news():
+    """General market news — last 7 days, cached 15 min."""
+    cache_key = "__general__"
+    now = time.time()
+    cached = _NEWS_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < NEWS_CACHE_TTL:
+        return cached[1]
+
+    if FINNHUB_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{FINNHUB_BASE}/news",
+                    params={"category": "general", "token": FINNHUB_API_KEY},
+                )
+            items = resp.json()
+            if not isinstance(items, list):
+                raise ValueError(f"Unexpected response: {items}")
+
+            cutoff   = now - NEWS_MAX_AGE
+            articles = []
+            for item in items:
+                if item.get("datetime", 0) < cutoff:
+                    continue
+                articles.append(_map_finnhub_article(item))
+                if len(articles) >= 20:
+                    break
+
+            _NEWS_CACHE[cache_key] = (now, articles)
+            return articles
+
+        except Exception:
+            pass  # fall through to empty list
+
+    return []
+
+
+@app.get("/api/news/{symbol}")
+async def get_stock_news(symbol: str):
+    """Company-specific news — last 7 days, cached 15 min per symbol."""
+    cache_key = f"stock:{symbol.upper()}"
+    now = time.time()
+    cached = _NEWS_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < NEWS_CACHE_TTL:
+        return cached[1]
+
+    if FINNHUB_API_KEY:
+        try:
+            to_date   = datetime.now().strftime("%Y-%m-%d")
+            from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{FINNHUB_BASE}/company-news",
+                    params={
+                        "symbol": symbol,
+                        "from":   from_date,
+                        "to":     to_date,
+                        "token":  FINNHUB_API_KEY,
+                    },
+                )
+            items = resp.json()
+            if not isinstance(items, list):
+                raise ValueError(f"Unexpected response: {items}")
+
+            cutoff   = now - NEWS_MAX_AGE
+            articles = []
+            for item in items:
+                if item.get("datetime", 0) < cutoff:
+                    continue
+                articles.append(_map_finnhub_article(item))
+                if len(articles) >= 15:
+                    break
+
+            _NEWS_CACHE[cache_key] = (now, articles)
+            return articles
+
+        except Exception:
+            pass
+
+    return []
+
+
 # ── Symbol Search ─────────────────────────────────────────────────────────────
 
 @app.get("/api/search")
@@ -152,60 +275,110 @@ async def search_symbols(query: str = ""):
     if not query.strip():
         return []
 
-    if TWELVE_DATA_API_KEY:
+    if FINNHUB_API_KEY:
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(
-                    f"{TWELVE_DATA_BASE}/symbol_search",
-                    params={"symbol": query, "outputsize": 10, "apikey": TWELVE_DATA_API_KEY},
+                    f"{FINNHUB_BASE}/search",
+                    params={"q": query, "token": FINNHUB_API_KEY},
                 )
             data = resp.json()
-            if "data" in data:
-                return [
-                    {
-                        "symbol": item.get("symbol"),
-                        "name": item.get("instrument_name"),
-                        "exchange": item.get("exchange"),
-                        "type": item.get("instrument_type"),
-                    }
-                    for item in data["data"]
-                ]
+
+            results = []
+            for item in data.get("result", []):
+                item_type = item.get("type", "")
+                if item_type not in ("Common Stock", "ETP"):
+                    continue
+
+                sym      = item.get("symbol", "")
+                has_dot  = "." in sym   # Finnhub uses dots for non-US exchanges
+                exchange = "NSE/BSE — may have limited data" if has_dot else ""
+
+                results.append({
+                    "symbol":         sym,
+                    "name":           item.get("description", sym),
+                    "display_symbol": item.get("displaySymbol", sym),
+                    "exchange":       exchange,
+                    "type":           item_type,
+                })
+
+                if len(results) >= 8:
+                    break
+
+            return results
+
         except Exception:
             pass  # fall through to mock
 
-    # Mock fallback: match query against known symbols/names
+    # Mock fallback: fuzzy match against known symbols/names
     q = query.upper()
     results = []
     for sym, name in _COMPANY_NAMES.items():
         if q in sym or q in name.upper():
-            results.append({"symbol": sym, "name": name, "exchange": "NASDAQ", "type": "Common Stock"})
-    return results[:10]
+            results.append({
+                "symbol":         sym,
+                "name":           name,
+                "display_symbol": sym,
+                "exchange":       "NASDAQ",
+                "type":           "Common Stock",
+            })
+    return results[:8]
 
 
 # ── Market Data ───────────────────────────────────────────────────────────────
 
 @app.get("/api/quote/{symbol}")
 async def get_quote(symbol: str):
-    # Try live data first; fall back to mock on any failure
-    if TWELVE_DATA_API_KEY:
+    if FINNHUB_API_KEY:
         try:
+            now = time.time()
+            cached = _PROFILE_CACHE.get(symbol.upper())
+            profile_fresh = cached and (now - cached[0]) < PROFILE_CACHE_TTL
+
             async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(
-                    f"{TWELVE_DATA_BASE}/quote",
-                    params={"symbol": symbol, "apikey": TWELVE_DATA_API_KEY},
-                )
-            data = resp.json()
-            if "code" not in data or data["code"] == 200:
-                return {
-                    "symbol": data.get("symbol"),
-                    "name": data.get("name"),
-                    "price": data.get("close"),
-                    "change": data.get("change"),
-                    "change_percent": data.get("percent_change"),
-                    "volume": data.get("volume"),
-                    "is_market_open": data.get("is_market_open"),
-                    "is_mock": False,
-                }
+                if profile_fresh:
+                    # Profile already cached — only hit the quote endpoint
+                    q_resp = await client.get(
+                        f"{FINNHUB_BASE}/quote",
+                        params={"symbol": symbol, "token": FINNHUB_API_KEY},
+                    )
+                    profile = cached[1]
+                else:
+                    # Fetch quote + profile in parallel
+                    q_resp, p_resp = await asyncio.gather(
+                        client.get(f"{FINNHUB_BASE}/quote",
+                                   params={"symbol": symbol, "token": FINNHUB_API_KEY}),
+                        client.get(f"{FINNHUB_BASE}/stock/profile2",
+                                   params={"symbol": symbol, "token": FINNHUB_API_KEY}),
+                    )
+                    profile = p_resp.json()
+                    _PROFILE_CACHE[symbol.upper()] = (now, profile)
+
+            q = q_resp.json()
+
+            # Finnhub returns c=0 for unknown symbols
+            if not q.get("c"):
+                raise ValueError(f"No quote data for {symbol!r}")
+
+            return {
+                "symbol":         symbol.upper(),
+                "name":           profile.get("name") or symbol.upper(),
+                "exchange":       profile.get("exchange", ""),
+                "logo":           profile.get("logo", ""),
+                "market_cap":     profile.get("marketCapitalization"),
+                "price":          str(round(float(q["c"]), 4)),
+                "change":         str(round(float(q.get("d")  or 0), 4)),
+                "change_percent": str(round(float(q.get("dp") or 0), 4)),
+                "high":           str(round(float(q.get("h")  or 0), 4)),
+                "low":            str(round(float(q.get("l")  or 0), 4)),
+                "open":           str(round(float(q.get("o")  or 0), 4)),
+                "prev_close":     str(round(float(q.get("pc") or 0), 4)),
+                # Finnhub /quote does not expose volume — omit so frontend hides the field
+                "volume":         None,
+                "is_market_open": True,
+                "is_mock":        False,
+            }
+
         except Exception:
             pass  # fall through to mock
 
@@ -217,34 +390,61 @@ async def get_candles(symbol: str, interval: str = "1day"):
     if interval not in ("5min", "1day"):
         raise HTTPException(status_code=400, detail="interval must be '5min' or '1day'")
 
-    # Try live data first; fall back to mock on any failure
-    if TWELVE_DATA_API_KEY:
+    if FINNHUB_API_KEY:
         try:
-            outputsize = 78 if interval == "5min" else 90
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            to_ts = int(time.time())
+
+            if interval == "5min":
+                from_ts    = to_ts - (2 * 24 * 60 * 60)   # last 2 days → plenty of 5-min bars
+                resolution = "5"
+            else:  # 1day
+                from_ts    = to_ts - (180 * 24 * 60 * 60)  # last 6 months of daily bars
+                resolution = "D"
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
-                    f"{TWELVE_DATA_BASE}/time_series",
+                    f"{FINNHUB_BASE}/stock/candle",
                     params={
-                        "symbol": symbol,
-                        "interval": interval,
-                        "outputsize": outputsize,
-                        "apikey": TWELVE_DATA_API_KEY,
+                        "symbol":     symbol,
+                        "resolution": resolution,
+                        "from":       from_ts,
+                        "to":         to_ts,
+                        "token":      FINNHUB_API_KEY,
                     },
                 )
             data = resp.json()
-            if "code" not in data or data["code"] == 200:
-                candles = [
-                    {
-                        "time": bar["datetime"],
-                        "open": float(bar["open"]),
-                        "high": float(bar["high"]),
-                        "low": float(bar["low"]),
-                        "close": float(bar["close"]),
-                        "volume": int(bar["volume"]),
-                    }
-                    for bar in reversed(data.get("values", []))
-                ]
-                return {"symbol": symbol, "interval": interval, "candles": candles, "is_mock": False}
+
+            if data.get("s") != "ok":
+                raise ValueError(
+                    f"Finnhub returned s={data.get('s')!r} for {symbol} ({interval})"
+                )
+
+            timestamps = data["t"]
+            opens      = data["o"]
+            highs      = data["h"]
+            lows       = data["l"]
+            closes     = data["c"]
+            volumes    = data.get("v", [])
+
+            candles = []
+            for i, ts in enumerate(timestamps):
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                time_str = (
+                    dt.strftime("%Y-%m-%d")
+                    if interval == "1day"
+                    else dt.strftime("%Y-%m-%d %H:%M:%S")
+                )
+                candles.append({
+                    "time":   time_str,
+                    "open":   round(float(opens[i]),  4),
+                    "high":   round(float(highs[i]),  4),
+                    "low":    round(float(lows[i]),   4),
+                    "close":  round(float(closes[i]), 4),
+                    "volume": int(volumes[i]) if i < len(volumes) else 0,
+                })
+
+            return {"symbol": symbol, "interval": interval, "candles": candles, "is_mock": False}
+
         except Exception:
             pass  # fall through to mock
 
@@ -252,7 +452,7 @@ async def get_candles(symbol: str, interval: str = "1day"):
     return {"symbol": symbol, "interval": interval, "candles": candles, "is_mock": True}
 
 
-# ── Alpha Vantage helpers ─────────────────────────────────────────────────────
+# ── Alpha Vantage news helper (optional enrichment for Holo) ──────────────────
 
 async def get_news_sentiment(ticker: str) -> list:
     if not AV_API_KEY:
@@ -261,7 +461,12 @@ async def get_news_sentiment(ticker: str) -> list:
         async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.get(
                 AV_BASE_URL,
-                params={"function": "NEWS_SENTIMENT", "tickers": ticker, "limit": 5, "apikey": AV_API_KEY},
+                params={
+                    "function": "NEWS_SENTIMENT",
+                    "tickers":  ticker,
+                    "limit":    5,
+                    "apikey":   AV_API_KEY,
+                },
             )
         data = resp.json()
         return [item["title"] for item in data.get("feed", [])[:5] if "title" in item]
@@ -287,7 +492,10 @@ async def mentor_explain(body: ExplainRequest):
 
     headlines = await get_news_sentiment(body.symbol)
     if headlines:
-        user_content += f"\n\nRecent news context for {body.symbol}:\n" + "\n".join(f"- {h}" for h in headlines)
+        user_content += (
+            f"\n\nRecent news context for {body.symbol}:\n"
+            + "\n".join(f"- {h}" for h in headlines)
+        )
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -325,8 +533,7 @@ async def mentor_chat(body: ChatRequest):
             system += "\n\nCurrent session context:\n" + "\n".join(ctx_parts)
 
     messages = [{"role": m.role, "content": m.content} for m in body.messages]
-
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     def stream_response():
         with client.messages.stream(
@@ -341,9 +548,9 @@ async def mentor_chat(body: ChatRequest):
     return StreamingResponse(stream_response(), media_type="text/plain")
 
 
-# ── General AI (used by frontend simulator features) ─────────────────────────
+# ── General AI (portfolio features) ──────────────────────────────────────────
 
-HoloTrade_SYSTEM_PROMPT = """You are HoloTrade, a friendly AI financial assistant built into a stock trading simulator.
+HOLOTRADE_SYSTEM_PROMPT = """You are HoloTrade, a friendly AI financial assistant built into a stock trading simulator.
 Your role is to educate beginner investors clearly and encouragingly.
 Never give direct financial advice or predict stock prices.
 Focus on explaining concepts and analyzing past data.
@@ -359,11 +566,11 @@ async def ai_ask(body: AskRequest):
     if body.context:
         user_content = f"Context: {body.context}\n\n{body.prompt}"
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client  = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1024,
-        system=HoloTrade_SYSTEM_PROMPT,
+        system=HOLOTRADE_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_content}],
     )
     return {"response": message.content[0].text}
@@ -385,7 +592,7 @@ Return a JSON array where each object has exactly these keys:
 
 Return ONLY the raw JSON array — no markdown, no code fences, no extra text."""
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client  = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=2048,
