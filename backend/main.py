@@ -17,8 +17,10 @@ load_dotenv()
 
 TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+AV_API_KEY = os.getenv("AV_API_KEY")
 
 TWELVE_DATA_BASE = "https://api.twelvedata.com"
+AV_BASE_URL = "https://www.alphavantage.co/query"
 
 HOLO_SYSTEM_PROMPT = """You are Holo, a friendly and encouraging financial educator built into HoloTrade Mentor.
 
@@ -250,6 +252,23 @@ async def get_candles(symbol: str, interval: str = "1day"):
     return {"symbol": symbol, "interval": interval, "candles": candles, "is_mock": True}
 
 
+# ── Alpha Vantage helpers ─────────────────────────────────────────────────────
+
+async def get_news_sentiment(ticker: str) -> list:
+    if not AV_API_KEY:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(
+                AV_BASE_URL,
+                params={"function": "NEWS_SENTIMENT", "tickers": ticker, "limit": 5, "apikey": AV_API_KEY},
+            )
+        data = resp.json()
+        return [item["title"] for item in data.get("feed", [])[:5] if "title" in item]
+    except Exception:
+        return []
+
+
 # ── AI Mentor ─────────────────────────────────────────────────────────────────
 
 @app.post("/api/mentor/explain")
@@ -265,6 +284,10 @@ async def mentor_explain(body: ExplainRequest):
         user_content += f"My question: {body.question}"
     else:
         user_content += "Can you explain what this chart is showing me?"
+
+    headlines = await get_news_sentiment(body.symbol)
+    if headlines:
+        user_content += f"\n\nRecent news context for {body.symbol}:\n" + "\n".join(f"- {h}" for h in headlines)
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 

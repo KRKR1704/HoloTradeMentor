@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { useAppContext } from '../context/AppContext';
+import { useAppContext, executeTrade } from '../context/AppContext';
+import { TradeType } from '../types';
 import { CandlestickChart } from '../components/CandlestickChart';
 import { HoloMentor } from '../components/HoloMentor';
+import { TradeFeedbackModal } from '../components/common/TradeFeedbackModal';
 import { useStockQuote, QuoteData } from '../hooks/useStockQuote';
 
 type Interval = '5min' | '1day';
@@ -150,9 +152,11 @@ const StockDetailPage: React.FC = () => {
   const { symbol: rawSymbol } = useParams<{ symbol: string }>();
   // React Router v6 auto-decodes path params, so TCS%3ANSE → TCS:NSE
   const symbol = rawSymbol ?? '';
-  const { state } = useAppContext();
-  const { currentUser } = state;
+  const { state, dispatch } = useAppContext();
+  const { currentUser, tradeFeedback, error: tradeError } = state;
   const [interval, setInterval] = useState<Interval>('1day');
+  const [shares, setShares] = useState(1);
+  const [isTrading, setIsTrading] = useState(false);
 
   const { quote, loading, error, updatedAt } = useStockQuote(symbol);
 
@@ -160,6 +164,26 @@ const StockDetailPage: React.FC = () => {
     () => currentUser?.portfolio.find((p) => p.stock.symbol === symbol),
     [currentUser, symbol]
   );
+
+  const handleTrade = async (type: TradeType) => {
+    if (!currentUser || !quote || isTrading) return;
+    const stock = {
+      symbol,
+      name: quote.name ?? symbol,
+      price: quote.price,
+      open: quote.price - quote.change,
+      previousClose: quote.price - quote.change,
+    };
+    setIsTrading(true);
+    await executeTrade(dispatch, state, stock, shares, type);
+    setIsTrading(false);
+  };
+
+  const totalCost = (quote?.price ?? 0) * shares;
+  const canBuy = !!currentUser && !!quote && currentUser.balance >= totalCost && shares > 0;
+  const canSell = !!userHolding && userHolding.shares >= shares && shares > 0;
+  const fmt = (n: number) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
   if (!symbol) {
     return <div className="container mx-auto p-4 text-muted-foreground">Stock not found.</div>;
@@ -197,6 +221,64 @@ const StockDetailPage: React.FC = () => {
         </div>
       )}
 
+      {/* Trade panel */}
+      <div className="bg-card border border-slate-800 p-4 sm:p-6 rounded-lg">
+        <h2 className="text-xl font-bold mb-4">Trade {symbol}</h2>
+        <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
+              Shares
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={shares}
+              onChange={(e) => setShares(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-28 bg-secondary border border-slate-700 rounded-lg px-3 py-2 text-foreground font-mono text-sm focus:ring-2 focus:ring-primary focus:border-primary transition"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
+              Estimated Total
+            </span>
+            <span className="text-sm font-semibold font-mono text-foreground py-2">
+              {quote ? fmt(totalCost) : '—'}
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
+              Cash Balance
+            </span>
+            <span className="text-sm font-semibold font-mono text-foreground py-2">
+              {currentUser ? fmt(currentUser.balance) : '—'}
+            </span>
+          </div>
+
+          <div className="flex gap-3 sm:ml-auto">
+            <button
+              onClick={() => handleTrade(TradeType.BUY)}
+              disabled={!canBuy || isTrading}
+              className="px-6 py-2 bg-positive text-white font-bold rounded-lg hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed min-w-[80px]"
+            >
+              {isTrading ? '…' : 'Buy'}
+            </button>
+            <button
+              onClick={() => handleTrade(TradeType.SELL)}
+              disabled={!canSell || isTrading}
+              className="px-6 py-2 bg-destructive text-white font-bold rounded-lg hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed min-w-[80px]"
+            >
+              {isTrading ? '…' : 'Sell'}
+            </button>
+          </div>
+        </div>
+
+        {tradeError && (
+          <p className="mt-3 text-sm text-destructive">{tradeError}</p>
+        )}
+      </div>
+
       {/* Two-panel: Chart + Holo */}
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_400px] gap-6 items-start">
         <CandlestickChart
@@ -210,6 +292,13 @@ const StockDetailPage: React.FC = () => {
           liveChangePercent={quote?.changePercent}
         />
       </div>
+
+      {tradeFeedback && (
+        <TradeFeedbackModal
+          feedbackContext={tradeFeedback}
+          onClose={() => dispatch({ type: 'CLOSE_TRADE_FEEDBACK' })}
+        />
+      )}
     </div>
   );
 };
