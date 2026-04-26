@@ -73,6 +73,18 @@ Persistent banner and AI-level prompt constraints enforce educational-only outpu
 
 ---
 
+---
+
+## Team Members
+
+| Name                          | LinkedIn                                                               |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| **Shriya Sharma**             | [LinkedIn](https://www.linkedin.com/in/shriyasharmacs26/)              |
+| **Roopesh Kumar Reddy Kaipa** | [LinkedIn](https://www.linkedin.com/in/roopeshkaipa/)                  |
+| **Vedika Desai**              | [LinkedIn](https://www.linkedin.com/in/vedika-dinesh-desai-80690a240/) |
+
+---
+
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -131,48 +143,6 @@ npm run dev
 ```
 
 The app will be running at `http://localhost:5173`.
-
----
-
-## 📁 Project Structure
-
-```
-holotrade-mentor/
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── StockSelector/       # Left panel — stock picker & live quotes
-│   │   │   ├── ChartViewer/         # Centre panel — candlestick chart
-│   │   │   └── HoloMentorPanel/     # Right panel — AI mentor & Q&A
-│   │   ├── hooks/                   # Custom React hooks (data fetching, polling)
-│   │   ├── utils/                   # Helpers, formatters, chart context builders
-│   │   └── App.tsx
-│   └── package.json
-├── backend/
-│   ├── main.py                      # FastAPI entry point
-│   ├── routers/
-│   │   ├── quotes.py                # /quote endpoint proxy
-│   │   ├── candles.py               # /time_series endpoint proxy
-│   │   └── mentor.py                # Claude AI mentor endpoint
-│   ├── services/
-│   │   ├── twelve_data.py
-│   │   ├── alpha_vantage.py
-│   │   └── claude_mentor.py
-│   └── requirements.txt
-└── README.md
-```
-
----
-
-## 🔌 API Reference
-
-| API              | Endpoints Used                           | Purpose                             | Free Tier     |
-| ---------------- | ---------------------------------------- | ----------------------------------- | ------------- |
-| Twelve Data      | `/quote`, `/time_series`                 | Live price quotes, OHLC candle data | 800 req/day   |
-| Alpha Vantage    | `/GLOBAL_QUOTE`, `/TIME_SERIES_INTRADAY` | Fallback quote & candle data        | 25 req/day    |
-| Anthropic Claude | `POST /v1/messages`                      | Holo mentor explanations & Q&A      | Pay-per-token |
-
----
 
 ## 🗺️ Implementation Roadmap
 
