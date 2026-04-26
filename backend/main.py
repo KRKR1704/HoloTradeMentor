@@ -10,12 +10,12 @@ import anthropic
 import yfinance as yf
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Optional, List, Dict
 from datetime import datetime, timezone, timedelta
 
 load_dotenv()
@@ -55,7 +55,7 @@ app = FastAPI(title="HoloTrade Mentor API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=["http://localhost:3000", "http://localhost:5173", "https://your-vercel-frontend.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
