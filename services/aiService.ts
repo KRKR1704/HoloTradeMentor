@@ -1,7 +1,7 @@
 // All AI calls route through the FastAPI backend which uses the Anthropic Claude API.
 // No API keys are stored or used in the frontend.
 
-import { Stock, PortfolioItem, TradeType, Trade, User, StockHistoryPoint, NewsArticle } from '../types';
+import { Stock, PortfolioItem, TradeType, Trade, User, StockHistoryPoint, NewsArticle, Lesson } from '../types';
 
 const BACKEND = 'http://localhost:8000';
 
@@ -32,7 +32,7 @@ export async function streamAI(
     }
     return full;
   } catch {
-    return 'Unable to reach the AI backend. Make sure it is running on port 8000.';
+    return fallbackResponse;
   }
 }
 
@@ -156,6 +156,32 @@ export const getPriceAlertExplanationPrompt = (holding: PortfolioItem, newPrice:
   const pnlText = unrealizedPnl >= 0 ? `an unrealized gain of $${unrealizedPnl.toFixed(2)}` : `an unrealized loss of $${Math.abs(unrealizedPnl).toFixed(2)}`;
 
   return `${holding.stock.name} (${holding.stock.symbol}) has ${direction} by ${Math.abs(pct).toFixed(2)}% to $${newPrice.toFixed(2)}. You hold ${holding.shares} shares at an average cost of $${holding.avgCost.toFixed(2)}, giving you ${pnlText}. Briefly explain what this price movement means for a beginner investor and what "unrealized gain/loss" means. Keep it to 2-3 sentences, educational, and don't recommend any action.`;
+};
+
+export const fetchLearnLessons = async (completedIds: string[] = []): Promise<Lesson[]> => {
+  try {
+    const params = new URLSearchParams();
+    if (completedIds.length > 0) {
+      params.set('completedIds', completedIds.join(','));
+    }
+
+    const url = `${BACKEND}/api/mentor/lessons${params.toString() ? `?${params.toString()}` : ''}`;
+    const res = await fetch(url);
+    const text = await res.text();
+    if (!res.ok) {
+      console.error('fetchLearnLessons failed:', res.status, res.statusText, text);
+      return [];
+    }
+    const data = JSON.parse(text);
+    if (data && typeof data === 'object' && 'success' in data && data.success === false) {
+      console.error('fetchLearnLessons api error:', data.message);
+      return [];
+    }
+    return Array.isArray(data) ? data : [];
+  } catch (error) {
+    console.error('fetchLearnLessons error:', error);
+    return [];
+  }
 };
 
 export const generateRealTimeNews = async (): Promise<NewsArticle[]> => {

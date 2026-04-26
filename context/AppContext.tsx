@@ -15,6 +15,8 @@ import {
   MarketData,
 } from "../types";
 import { STARTING_BALANCE } from "../constants";
+import { getStockQuote } from "../services/stockService";
+import { fetchCurrentUser } from "../services/userService";
 
 const BACKEND = "http://localhost:8000";
 
@@ -59,6 +61,7 @@ type Action =
   | { type: "TRADE_START" }
   | { type: "TRADE_FAIL"; payload: string }
   | { type: "COMPLETE_LESSON"; payload: { updatedUser: User } }
+  | { type: "LOAD_USER_SUCCESS"; payload: User }
   | { type: "CLOSE_TRADE_FEEDBACK" }
   | { type: "UPDATE_MARKET_DATA"; payload: MarketData }
   | { type: "OPEN_INSIGHT_MODAL" }
@@ -100,6 +103,14 @@ const appReducer = (state: AppState, action: Action): AppState => {
     case "AUTH_LOADING":
       return { ...state, isLoading: true };
     case "LOGIN_SUCCESS":
+      return {
+        ...state,
+        isAuthenticated: true,
+        currentUser: action.payload,
+        error: null,
+        isLoading: false,
+      };
+    case "LOAD_USER_SUCCESS":
       return {
         ...state,
         isAuthenticated: true,
@@ -304,6 +315,8 @@ export const executeTrade = async (
       portfolio: newPortfolio,
       tradeHistory: [...userBeforeTrade.tradeHistory, newTrade],
     };
+
+    dispatch({ type: "UPDATE_MARKET_DATA", payload: { ...currentState.marketData, [stock.symbol]: currentPrice } });
 
     dispatch({
       type: "TRADE_SUCCESS",
