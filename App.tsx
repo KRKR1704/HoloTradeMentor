@@ -10,7 +10,6 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import Dashboard from "./pages/Dashboard";
 import Trade from "./pages/Trade";
 import Learn from "./pages/Learn";
-import Assistant from "./pages/Assistant";
 import NewsPage from "./pages/News";
 import StockDetailPage from "./pages/StockDetailPage";
 import DemoPage from "./pages/DemoPage";
@@ -43,7 +42,6 @@ function AppContent() {
               <Route path="/demo" element={<DemoPage />} />
               <Route path="/news" element={<NewsPage />} />
               <Route path="/learn" element={<Learn />} />
-              <Route path="/assistant" element={<Assistant />} />
               <Route path="*" element={<Navigate to="/" />} />
             </Routes>
           </ErrorBoundary>

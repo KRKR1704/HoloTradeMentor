@@ -82,7 +82,7 @@ const Dashboard: React.FC = () => {
   const portfolioWithData = useMemo(() => {
     if (!currentUser) return [];
     return currentUser.portfolio.map(item => {
-        const currentPrice = marketData[item.stock.symbol] || item.stock.price;
+        const currentPrice = marketData[item.stock.symbol] ?? item.stock.price;
         const totalValue = currentPrice * item.shares;
         const totalCost = item.avgCost * item.shares;
         const totalPandL = totalValue - totalCost;

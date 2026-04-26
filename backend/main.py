@@ -5,12 +5,12 @@ import random
 import hashlib
 import httpx
 import anthropic
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 
 load_dotenv()
@@ -40,7 +40,12 @@ app = FastAPI(title="HoloTrade Mentor API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,6 +76,42 @@ class AskRequest(BaseModel):
     context: Optional[str] = None
 
 
+class StockModel(BaseModel):
+    symbol: str
+    name: str
+    price: float
+    open: float
+    previousClose: float
+
+
+class PortfolioItemModel(BaseModel):
+    stock: StockModel
+    shares: int
+    avgCost: float
+
+
+class TradeModel(BaseModel):
+    stock: StockModel
+    shares: int
+    price: float
+    type: str
+    timestamp: int
+
+
+class UserModel(BaseModel):
+    id: str
+    name: str
+    email: str
+    balance: float
+    portfolio: List[PortfolioItemModel]
+    tradeHistory: List[TradeModel]
+    lessonProgress: List[str] = []
+
+
+class LessonProgressUpdate(BaseModel):
+    lessonId: str
+
+
 # ── Mock data fallback ───────────────────────────────────────────────────────
 # Used when Twelve Data API key is absent or returns an error.
 
@@ -86,6 +127,126 @@ _COMPANY_NAMES = {
     "GOOGL": "Alphabet Inc.", "AMZN": "Amazon.com Inc.", "NFLX": "Netflix Inc.",
     "AMD": "Advanced Micro Devices", "INTC": "Intel Corp.", "CRM": "Salesforce Inc.",
 }
+
+DEFAULT_USER = UserModel(
+    id="guest-id",
+    name="Investor",
+    email="guest@example.com",
+    balance=10000.0,
+    portfolio=[],
+    tradeHistory=[],
+    lessonProgress=[],
+)
+
+USER_STORE: Dict[str, UserModel] = {"guest-id": DEFAULT_USER}
+
+LESSON_CATALOG = [
+    {
+        "id": "l1",
+        "title": "What is a Stock?",
+        "difficulty": "Beginner",
+        "level": 1,
+        "content": "A stock is a small ownership share in a company. Owning one means you participate in the company’s success and learn how markets value businesses.",
+        "resources": [
+            {
+                "label": "Investopedia: What Is a Stock?",
+                "url": "https://www.investopedia.com/terms/s/stock.asp",
+            }
+        ],
+    },
+    {
+        "id": "l2",
+        "title": "How to Read Stock Charts",
+        "difficulty": "Beginner",
+        "level": 2,
+        "content": "Stock charts show how prices change over time. Learning to read bars, lines, and trends helps you understand whether a stock is moving up, down, or sideways.",
+        "sections": [
+            {
+                "title": "Chart basics",
+                "content": "Line charts are the simplest, showing the closing price over time. Candlestick charts provide more information, including the open, high, low, and close prices for each period.",
+            },
+            {
+                "title": "Why it matters",
+                "content": "Reading a chart helps you see trends, momentum, and whether a stock is moving up, down, or sideways.",
+            },
+        ],
+        "resources": [
+            {
+                "label": "Investopedia: Stock Chart Basics",
+                "url": "https://www.investopedia.com/terms/s/stock-chart.asp",
+            }
+        ],
+    },
+    {
+        "id": "l3",
+        "title": "Understanding Market Cap",
+        "difficulty": "Intermediate",
+        "level": 3,
+        "content": "Market capitalization is the total value of a company’s shares. It helps beginners compare companies and understand the difference between large, mid, and small caps.",
+        "sections": [
+            {
+                "title": "Why market cap matters",
+                "content": "Market cap helps beginners compare companies and understand the difference between large, mid, and small caps.",
+            },
+        ],
+        "resources": [
+            {
+                "label": "Investopedia: Market Capitalization",
+                "url": "https://www.investopedia.com/terms/m/marketcapitalization.asp",
+            }
+        ],
+    },
+    {
+        "id": "l4",
+        "title": "What is Diversification?",
+        "difficulty": "Intermediate",
+        "level": 4,
+        "content": "Diversification means spreading risk across different stocks or sectors. It is a simple way to avoid putting too much weight on one company or market move.",
+    },
+    {
+        "id": "l5",
+        "title": "Managing Risk and Review",
+        "difficulty": "Advanced",
+        "level": 5,
+        "content": "Managing risk means thinking about how much loss you can accept and reviewing your holdings regularly. It helps you stay calm and learn from how the market behaves.",
+    },
+    {
+        "id": "l6",
+        "title": "Why Earnings Matter",
+        "difficulty": "Intermediate",
+        "level": 3,
+        "content": "Company earnings show how much profit a business makes. Beginners can use earnings to understand whether a stock is growing and how the market may react.",
+    },
+    {
+        "id": "l7",
+        "title": "What Is a Dividend?",
+        "difficulty": "Beginner",
+        "level": 2,
+        "content": "A dividend is a payment a company makes to its shareholders. It is one way investors can earn money from stocks, not just from price changes.",
+    },
+    {
+        "id": "l8",
+        "title": "Support and Resistance",
+        "difficulty": "Intermediate",
+        "level": 4,
+        "content": "Support and resistance are price levels where a stock often stops falling or rising. These terms help traders notice where buyers or sellers may step in.",
+    },
+    {
+        "id": "l9",
+        "title": "Why Volume Matters",
+        "difficulty": "Intermediate",
+        "level": 4,
+        "content": "Volume shows how many shares trade in a day. High volume can mean more interest and stronger price moves, while low volume often means the market is quiet.",
+    },
+    {
+        "id": "l10",
+        "title": "Reviewing Your Learning Progress",
+        "difficulty": "Advanced",
+        "level": 5,
+        "content": "Reviewing what you have learned helps you remember it longer. Reflecting on new concepts turns individual lessons into a stronger understanding of the market.",
+    },
+]
+
 
 def _seed_for(symbol: str) -> int:
     """Stable seed derived from the symbol so mock data is consistent per symbol."""
@@ -210,6 +371,19 @@ async def get_quote(symbol: str):
             pass  # fall through to mock
 
     return _mock_quote(symbol)
+
+
+@app.get("/api/user")
+async def get_user():
+    return USER_STORE["guest-id"]
+
+
+@app.patch("/api/user/lesson-progress")
+async def update_lesson_progress(body: LessonProgressUpdate):
+    user = USER_STORE["guest-id"]
+    if body.lessonId not in user.lessonProgress:
+        user.lessonProgress.append(body.lessonId)
+    return user
 
 
 @app.get("/api/candles/{symbol}")
@@ -401,3 +575,24 @@ Return ONLY the raw JSON array — no markdown, no code fences, no extra text.""
         return json.loads(raw)
     except Exception:
         return []
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "message": "Internal server error. Please try again later."},
+    )
+
+
+@app.get("/api/mentor/lessons")
+async def mentor_lessons(completedIds: Optional[str] = Query(default=None), limit: int = Query(default=3, ge=1, le=20)):
+    try:
+        completed_list = [item.strip() for item in (completedIds or "").split(",") if item.strip()]
+        completed_set = set(completed_list)
+        available = [lesson for lesson in LESSON_CATALOG if lesson["id"] not in completed_set]
+        return available[:limit]
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "Error fetching lessons: %s" % str(exc)},
+        )

@@ -35,11 +35,24 @@ export interface Trade {
   timestamp: number;
 }
 
+export interface LessonResource {
+  label: string;
+  url: string;
+}
+
+export interface LessonSection {
+  title?: string;
+  content: string;
+}
+
 export interface Lesson {
   id: string;
   title: string;
   content: string;
   difficulty: 'Beginner' | 'Intermediate' | 'Advanced';
+  level?: number;
+  sections?: LessonSection[];
+  resources?: LessonResource[];
 }
 
 export interface User {

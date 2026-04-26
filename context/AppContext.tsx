@@ -15,6 +15,7 @@ import {
 } from "../types";
 import { STARTING_BALANCE } from "../constants";
 import { getStockQuote } from "../services/stockService";
+import { fetchCurrentUser } from "../services/userService";
 
 // FIX: Define and export PriceAlert interface to resolve import error in PriceAlertModal.tsx.
 export interface PriceAlert {
@@ -50,6 +51,7 @@ type Action =
   | { type: "TRADE_START" }
   | { type: "TRADE_FAIL"; payload: string }
   | { type: "COMPLETE_LESSON"; payload: { updatedUser: User } }
+  | { type: "LOAD_USER_SUCCESS"; payload: User }
   | { type: "CLOSE_TRADE_FEEDBACK" }
   | { type: "UPDATE_MARKET_DATA"; payload: MarketData }
   | { type: "OPEN_INSIGHT_MODAL" }
@@ -89,6 +91,14 @@ const appReducer = (state: AppState, action: Action): AppState => {
     case "AUTH_LOADING":
       return { ...state, isLoading: true };
     case "LOGIN_SUCCESS":
+      return {
+        ...state,
+        isAuthenticated: true,
+        currentUser: action.payload,
+        error: null,
+        isLoading: false,
+      };
+    case "LOAD_USER_SUCCESS":
       return {
         ...state,
         isAuthenticated: true,
@@ -159,8 +169,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({
 
   // Fetch initial market data and update periodically
   useEffect(() => {
+    const loadUser = async () => {
+      dispatch({ type: "AUTH_LOADING" });
+      const user = await fetchCurrentUser();
+      if (user) {
+        dispatch({ type: "LOAD_USER_SUCCESS", payload: user });
+      } else {
+        dispatch({ type: "AUTH_FAIL", payload: "Unable to load user profile." });
+      }
+    };
+
+    loadUser();
+  }, []);
+
+  useEffect(() => {
     const fetchMarketData = async () => {
-      const symbols = [
+      const staticSymbols = [
         "AAPL",
         "GOOGL",
         "MSFT",
@@ -217,6 +241,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({
         "T",
         "NFLX",
       ];
+
+      const portfolioSymbols = state.currentUser?.portfolio.map((item) => item.stock.symbol) ?? [];
+      const symbols = Array.from(new Set([...staticSymbols, ...portfolioSymbols]));
       const newMarketData: MarketData = {};
 
       for (const symbol of symbols) {
@@ -241,7 +268,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({
     const marketInterval = setInterval(fetchMarketData, 30000);
 
     return () => clearInterval(marketInterval);
-  }, []);
+  }, [state.currentUser?.portfolio]);
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>
@@ -329,6 +356,8 @@ export const executeTrade = async (
       portfolio: newPortfolio,
       tradeHistory: [...userBeforeTrade.tradeHistory, newTrade],
     };
+
+    dispatch({ type: "UPDATE_MARKET_DATA", payload: { ...currentState.marketData, [stock.symbol]: currentPrice } });
 
     dispatch({
       type: "TRADE_SUCCESS",
